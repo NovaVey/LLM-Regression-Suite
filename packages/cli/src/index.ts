@@ -6,6 +6,7 @@ import {
   getJudgeModel,
   getTargetModel,
 } from '@llmreg/core';
+import { runInit } from './commands/init.js';
 
 function readEnv(fn: () => string): string | undefined {
   try {
@@ -50,6 +51,22 @@ program
 
     if (!targetModel || !judgeModel || !db.reachable || !anthropic.reachable) {
       process.exitCode = 3; // infrastructure failure, per §7 exit codes
+    }
+  });
+
+program
+  .command('init')
+  .description('Scaffold a suite config + example dataset in a directory (defaults to the current one).')
+  .argument('[directory]', 'target directory', '.')
+  .action((directory: string) => {
+    try {
+      const { suitePath, casesPath } = runInit(directory);
+      console.log(`Scaffolded suite config: ${suitePath}`);
+      console.log(`Scaffolded example dataset (2 cases): ${casesPath}`);
+      console.log('Edit both, then run `llmreg run` once the runner is built (Phase 3).');
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 3;
     }
   });
 

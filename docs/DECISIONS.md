@@ -98,3 +98,21 @@ Real alternatives considered and rejected, recorded when the choice was made. Se
 - A **CI-based regression** (`ciUpper < 0`) is an *inference drawn from the very sample* that might be too small to trust. Trusting "the interval is entirely below zero" while simultaneously knowing "this sample is too small to trust" is in tension — arguably `pairedN < minPairedN` should gate this specific path, forcing `insufficient_data` instead.
 
 I have not changed the implementation to split these two triggers apart, for two reasons: it's a bigger interface/logic change than either delegated agent was asked to make unilaterally, and the project's own stated methodology (§6, §6.1 specifically) has a way to answer this empirically rather than by more armchair reasoning — Phase 6's null-model simulation, and Phase 4's comparison engine (the first real caller that will decide whether to even attempt a CI when `pairedN` is below floor), are better positioned to settle this with actual data than a fourth guess added to this file. Flagging for explicit resolution then, not now.
+
+## Phase 2
+
+### Suite config and case datasets are JSON, not YAML
+
+**Decision:** `llmreg init` scaffolds `suite.json` and `dataset.json`; `loadSuiteConfig`/`loadCases` in `packages/core/src/dataset/load.ts` only parse JSON.
+
+**Alternative:** YAML, which §2 explicitly allows ("YAML/JSON suite config") and which is arguably friendlier for hand-authoring 240 cases — comments, less punctuation noise, multi-line strings without escape sequences.
+
+**Why it lost:** Node has no built-in YAML parser, so supporting it means adding a dependency (`yaml` or `js-yaml`) that isn't in §2's stack list, and rule 6 asks that dependencies outside it be raised before adding. Since the spec's own wording already sanctions JSON as an equally valid choice ("YAML/JSON"), there was nothing to actually ask about — JSON satisfies the requirement with zero new dependencies. The real cost is on the dataset-authoring side (no comments; `criticalReason` has to be a JSON field rather than an inline comment, which it already needs to be anyway since it's machine-validated). Revisit if hand-authoring JSON at scale (Phase 10's 240 cases, or a client's real dataset per §13) turns out to be painful enough in practice to justify asking about `yaml` explicitly.
+
+### Dataset/config validation is hand-rolled, not a schema library
+
+**Decision:** `loadSuiteConfig`/`loadCases` validate field-by-field with explicit `if` checks and a custom `DatasetValidationError`, rather than a schema library (Zod, ajv, etc.) generating validation from a schema definition.
+
+**Alternative:** Zod — the de facto standard for this in a TypeScript codebase, would cut the validation code by more than half and centralize the schema as data rather than procedural checks.
+
+**Why it lost:** Not in §2's stack, so same as above — rule 6 says ask first, and there was a zero-new-dependency option that satisfies the actual requirement (Phase 2's exit criteria: "validation rejects a malformed config with a specific message"). More specifically here, though: this repo's whole posture in `docs/DECISIONS.md`'s very first entry is that dependencies in places the tool must be trustworthy are worth writing by hand so they can be verified line by line — config validation is exactly this project's first line of "fails loudly, never silently, with a specific reason" (§5.9), and a library's generic error shape (`"invalid_type" at path ["thresholds", "significanceAlpha"]`) would need translating into this project's voice (`thresholds.significanceAlpha must be strictly between 0 and 1, got 5`) regardless of which approach was used. Revisit if the validation surface grows enough (many more config shapes, e.g. per-grader config schemas in Phase 3) that hand-rolling becomes the more error-prone option — that's a real tradeoff Zod would win eventually, just not yet.
