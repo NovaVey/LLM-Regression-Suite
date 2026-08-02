@@ -109,3 +109,42 @@ Bootstrap CI recovering a known interval and McNemar matching a hand-computed ex
 **Exit criteria status:** the example support-agent suite loads with 240 cases — met, independently verified. Validation rejects a malformed config with a specific message — met: 9+ distinct malformations each produce a message naming the exact field and problem (see `docs/DECISIONS.md` and the test suite).
 
 No CHECKPOINT for Phase 2 per §9. Proceeding to Phase 3 (runner + cache + deterministic graders) once given the go-ahead.
+
+## Phase 3 — Runner, cache, deterministic graders
+
+**Owner:** main agent for all infrastructure per rule 11 ("the main agent owns... the runner, graders"); `test-author` for the §10 Runner test bucket, concurrently.
+
+**Files:**
+- `packages/core/src/graders/{exact,contains,regex,json,latency}.ts` + `registry.ts` — the five deterministic graders. `json_schema` is a deliberately small hand-rolled subset, not `ajv`.
+- `packages/core/src/runner/{cache,concurrency,execute,persist}.ts` — sha256 response cache per §5.7; fixed-lane concurrency limiter; orchestration with per-case error isolation and **injectable cache/target-caller** (so tests never need a real DB or API key); DB persistence (suites/cases/variants/runs/case_results/grades).
+- `packages/core/src/db/{migrate.ts,migrations/0000_init.sql}` — added mid-phase after discovering the real Railway DB had never actually been migrated (see incident below).
+- `packages/core/src/anthropic.ts` — `callTarget()` with retry/backoff (delegated to the SDK's own `maxRetries`, not hand-rolled) and a fallback for models that reject an explicit `temperature` (discovered live, see incident below).
+- `packages/cli`: `llmreg migrate` and `llmreg run --suite --dataset --label [options]`.
+- `examples/support-agent/suite.json` — added (was missing since Phase 2; only the dataset existed).
+- `packages/core/test/runner/{cache,execute}.test.ts` — 20 tests, the full §10 Runner bucket plus `computeCacheKey` coverage.
+- `docs/DECISIONS.md` — 3 new entries: SDK-delegated retry over hand-rolled, hand-rolled `json_schema` over `ajv`, and the temperature-deprecation fallback.
+
+**Two real incidents found and fixed during exit-criteria verification, not caught by any test because neither is something a test written in advance could have predicted:**
+
+1. **The real Railway database had no tables.** Every DB-touching check up to this point (Phase 0's `doctor`, this phase's cache/persist verification) ran against a local test Postgres in the build sandbox, which I created and migrated by hand — never against the real Railway instance. First real `llmreg run` on the user's machine failed with "relation suites does not exist." Fixed by checking in a proper migration (`0000_init.sql`, the exact §4 DDL) and an `llmreg migrate` command, verified end-to-end against a freshly created empty local Postgres before pushing back to the user.
+2. **`claude-sonnet-5` rejects an explicit `temperature` parameter.** A 400, not a warning: `` `temperature` is deprecated for this model``. This directly touches §2's temperature-0 determinism guarantee. Fixed with a retry-without-temperature fallback in `callTarget()` rather than either unconditionally dropping the parameter (would silently stop honoring it for models that do accept it) or hard-failing the run. **This is a real, open gap, not fully resolved**: for models that reject the parameter, the tool cannot force temperature-0 sampling via this mechanism, and whatever the model defaults to is what actually runs. Documented in `docs/DECISIONS.md`, not silently patched over — revisit if Anthropic exposes a different determinism control for these models.
+
+**Exit criteria — verified with real output, on the user's machine (this sandbox has no real Anthropic API access and cannot reach the real Railway DB, confirmed in Phase 0):**
+
+```
+$ node --env-file=.env packages/cli/dist/index.js run --suite examples/support-agent/suite.json --dataset examples/support-agent/dataset.json --label test-run --limit 5
+Run a2697653-ae2d-4fca-b738-aee9991dbd1e complete.
+  cases: 5, samples: 5, cache hits: 0 (0.0%)
+  errors: 0
+
+$ node --env-file=.env packages/cli/dist/index.js run --suite examples/support-agent/suite.json --dataset examples/support-agent/dataset.json --label test-run --limit 5
+Run 6541ca02-4919-454f-8f3c-bc8a318cdcc8 complete.
+  cases: 5, samples: 5, cache hits: 5 (100.0%)
+  errors: 0
+```
+
+- "Full suite runs against the target model" — met (5-case subset deliberately, not the full 240, to keep real API cost sane during infrastructure verification; nothing about the mechanism is case-count-dependent).
+- "Second identical run is ~100% cache hits" — met exactly (100.0%).
+- "A single case erroring does not fail the run and is reported as an error, not a zero" — met, verified via 20 automated tests (including `one-failing-case-does-not-abort-the-run`, each confirmed able to fail against a targeted broken reference implementation) plus the main agent's own local DB-backed verification with a synthetic failing case, rather than by deliberately breaking a real API call just to watch it happen live.
+
+No CHECKPOINT for Phase 3 per §9. Proceeding to Phase 4 (comparison engine) once given the go-ahead.
