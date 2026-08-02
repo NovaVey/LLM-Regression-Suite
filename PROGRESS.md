@@ -37,12 +37,14 @@ Created via the Railway API, in the existing **Upwork Portfolio** project (per i
 - Database name `llmreg` (not the default `railway`, since this account has multiple Postgres instances and a generic name would be confusing later).
 - Deployed and verified healthy: runtime logs show `database system is ready to accept connections`.
 
-**Gap: no public connectivity yet.** The private `DATABASE_URL` (`...@postgres-llmregsuite.railway.internal:5432/llmreg`) only resolves from inside Railway's private network. Our CLI/CI run outside it (locally, in GitHub Actions), so they need the public/proxy URL instead. Railway's GraphQL API exposes a `TCPProxyCreateInput` type but — confirmed via full schema introspection, not a guess — no matching `tcpProxyCreate` mutation; only `tcpProxyDelete` exists. Rather than guess at an undocumented mechanism against a real account with client services on it, this is called out to the user directly: enable a TCP Proxy on `Postgres-LLMRegSuite` → Settings → Networking (one dashboard action), then the public `DATABASE_URL`/`DATABASE_PUBLIC_URL` can be read back via the API.
+**Public connectivity: done.** User enabled the TCP Proxy via the Railway dashboard (`Postgres-LLMRegSuite` → Settings → Networking). Resulting proxy: `hayabusa.proxy.rlwy.net:42402` → internal `5432`. `DATABASE_PUBLIC_URL` set on the service to match the pattern the account's other Postgres services already use.
+
+**Could not verify connectivity from this session.** A `pg` connection attempt and a raw `/dev/tcp` probe to the proxy host:port both hung with no response (killed after timeout). The agent-proxy status (`$HTTPS_PROXY/__agentproxy/status`) shows this sandbox's egress is configured for HTTP(S) through a proxy plus a specific allowlist — arbitrary outbound TCP on port 42402 for the Postgres wire protocol isn't part of that path. This reads as a constraint of the sandbox this session runs in, not evidence of a problem with the Railway setup — the actual dev environment (the user's Windows machine, and later GitHub Actions) has normal outbound TCP and isn't subject to it. Flagged to the user rather than assumed either way.
 
 No credentials are written to any file in this repo — they go in the user's local `.env` (gitignored) and, later, GitHub Actions secrets for Phase 8.
 
 ## Open questions for the CHECKPOINT
 
-1. Enable the TCP Proxy on `Postgres-LLMRegSuite` (Railway dashboard → that service → Settings → Networking → TCP Proxy) so the database is reachable from outside Railway's private network — then I can pull the public `DATABASE_URL`.
-2. `ANTHROPIC_API_KEY` with credit and a spend limit set — this can only come from the user's own Anthropic account.
-3. Confirmation that `TARGET_MODEL=claude-sonnet-5` / `JUDGE_MODEL=claude-opus-5` (already in `.env.example` per §2) are the right pins, or should change.
+1. `ANTHROPIC_API_KEY` with credit and a spend limit set — this can only come from the user's own Anthropic account.
+2. Confirmation that `TARGET_MODEL=claude-sonnet-5` / `JUDGE_MODEL=claude-opus-5` (already in `.env.example` per §2) are the right pins, or should change.
+3. Whether the user can confirm `DATABASE_URL` connectivity from their own machine, since this session's sandbox couldn't verify it directly.
