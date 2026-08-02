@@ -1,0 +1,57 @@
+#!/usr/bin/env node
+import { Command } from 'commander';
+import {
+  checkAnthropicReachable,
+  checkDatabaseReachable,
+  getJudgeModel,
+  getTargetModel,
+} from '@llmreg/core';
+
+function readEnv(fn: () => string): string | undefined {
+  try {
+    return fn();
+  } catch {
+    return undefined;
+  }
+}
+
+const program = new Command();
+
+program
+  .name('llmreg')
+  .description(
+    'Paired evaluation with statistical significance for LLM prompt and model changes.'
+  )
+  .version('0.0.0');
+
+program
+  .command('doctor')
+  .description(
+    'Check that the database and Anthropic API are reachable, and print the pinned model IDs.'
+  )
+  .action(async () => {
+    const targetModel = readEnv(getTargetModel);
+    const judgeModel = readEnv(getJudgeModel);
+
+    console.log(`target model : ${targetModel ?? '(TARGET_MODEL not set)'}`);
+    console.log(`judge model  : ${judgeModel ?? '(JUDGE_MODEL not set)'}`);
+
+    const dbReachable = await checkDatabaseReachable();
+    console.log(`database     : ${dbReachable ? 'reachable' : 'unreachable'}`);
+
+    const anthropic = await checkAnthropicReachable();
+    console.log(
+      `anthropic api: ${
+        anthropic.reachable ? 'reachable' : `unreachable (${anthropic.error ?? 'unknown error'})`
+      }`
+    );
+
+    if (!targetModel || !judgeModel || !dbReachable || !anthropic.reachable) {
+      process.exitCode = 3; // infrastructure failure, per §7 exit codes
+    }
+  });
+
+program.parseAsync(process.argv).catch((err) => {
+  console.error(err);
+  process.exitCode = 3;
+});

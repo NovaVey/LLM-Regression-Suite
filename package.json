@@ -1,0 +1,22 @@
+{
+  "name": "llm-regression-suite",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Paired evaluation with statistical significance, validated LLM judges, and a PR check that blocks real regressions without crying wolf.",
+  "engines": {
+    "node": ">=20"
+  },
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.10"
+  }
+}
