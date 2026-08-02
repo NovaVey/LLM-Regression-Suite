@@ -57,13 +57,34 @@ export interface TargetCallResult {
 }
 
 /**
+ * True iff `err` is the specific 400 the API returns when a model rejects
+ * an explicit `temperature` outright — confirmed live against claude-sonnet-5
+ * ("`temperature` is deprecated for this model"), not assumed. See
+ * docs/DECISIONS.md for what this means for §2's temperature-0
+ * reproducibility guarantee.
+ */
+function isTemperatureDeprecatedError(err: unknown): boolean {
+  if (!(err && typeof err === 'object' && 'status' in err)) {
+    return false;
+  }
+  if ((err as { status?: number }).status !== 400) {
+    return false;
+  }
+  const message = err instanceof Error ? err.message : String(err);
+  return message.toLowerCase().includes('temperature') && message.toLowerCase().includes('deprecated');
+}
+
+/**
  * Calls the target model with one case's messages. Retries on transient
  * failures (429 rate limits, 5xx) are delegated to the SDK's own
  * `maxRetries` mechanism (exponential backoff, same conditions we'd
  * otherwise hand-roll — see docs/DECISIONS.md) rather than reimplemented
  * here. Non-transient errors (4xx other than 429) are not retried and
  * propagate to the caller, which is expected to isolate the failure to this
- * one case per §5.1/§5.9 rather than abort the run.
+ * one case per §5.1/§5.9 rather than abort the run — except the specific
+ * temperature-deprecated 400, which is retried once without `temperature`
+ * (see `isTemperatureDeprecatedError`) since some models reject the
+ * parameter outright rather than accepting and ignoring it.
  */
 export async function callTarget(
   messages: TargetMessage[],
@@ -73,17 +94,24 @@ export async function callTarget(
 ): Promise<TargetCallResult> {
   const anthropic = getAnthropicClient();
   const start = Date.now();
+  const maxRetries = options?.maxRetries ?? 3;
 
-  const response = await anthropic.messages.create(
-    {
-      model,
-      temperature,
-      max_tokens: options?.maxTokens ?? 1024,
-      ...(options?.systemPrompt !== undefined ? { system: options.systemPrompt } : {}),
-      messages: messages.map((m) => ({ role: m.role, content: m.content })),
-    },
-    { maxRetries: options?.maxRetries ?? 3 },
-  );
+  const basePayload = {
+    model,
+    max_tokens: options?.maxTokens ?? 1024,
+    ...(options?.systemPrompt !== undefined ? { system: options.systemPrompt } : {}),
+    messages: messages.map((m) => ({ role: m.role, content: m.content })),
+  };
+
+  let response;
+  try {
+    response = await anthropic.messages.create({ ...basePayload, temperature }, { maxRetries });
+  } catch (err) {
+    if (!isTemperatureDeprecatedError(err)) {
+      throw err;
+    }
+    response = await anthropic.messages.create(basePayload, { maxRetries });
+  }
 
   const latencyMs = Date.now() - start;
   const textBlock = response.content.find((block) => block.type === 'text');

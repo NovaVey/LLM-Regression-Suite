@@ -134,3 +134,19 @@ I have not changed the implementation to split these two triggers apart, for two
 **Alternative:** `ajv`, the standard JSON Schema validator for Node/TypeScript, which would give full draft-07/2020-12 compliance.
 
 **Why it lost:** Same reasoning as Phase 2's dataset validation and the in-repo statistics module (§2, and the very first entry in this file): `ajv` isn't in §2's stack, and rule 6 asks that dependencies outside it be raised before adding — there was a zero-dependency option (a documented subset) that satisfies what this grader is actually for, which is checking that a target's structured output roughly matches an expected shape, not acting as a general-purpose schema validator. The subset covers what real grader configs are likely to need (an object with required fields of known types, an array of a known item type, an enum of allowed values) without the surface area of the full spec. Revisit if a real use case needs `oneOf`/`$ref`/pattern matching that the subset genuinely can't express — that's a real ceiling this approach has, unlike the stats functions which don't have an analogous "eventually you'll need the full thing" pressure.
+
+### `claude-sonnet-5` rejects an explicit `temperature` parameter — retry-without-temperature fallback, not a silent workaround
+
+**Decision:** `callTarget()` in `packages/core/src/anthropic.ts` first tries the request with `temperature` set; if the API returns the specific 400 confirmed live against the real target model (`` `temperature` is deprecated for this model``), it retries once with `temperature` omitted entirely, rather than never sending `temperature` at all or crashing every case in the run.
+
+**Alternative 1:** Never send `temperature`, unconditionally — simpler, and would have avoided the error outright.
+
+**Why it lost:** Untested assumption that *no* target or judge model this tool might ever point at accepts the parameter. §2's env template (`TARGET_TEMPERATURE=0.0`) and the `variants.temperature` column exist because temperature-0 determinism is a named, load-bearing design principle (§2: "the opposite of the extraction pipeline... run-to-run variance inflates the paired difference and manufactures false regressions") — dropping the parameter unconditionally would silently stop honoring it for any model that *does* still accept it, with no signal that anything changed.
+
+**Alternative 2:** Treat this as a hard failure and require the user to fix their configuration (e.g. by unsetting temperature) before running.
+
+**Why it lost:** This is exactly the failure mode §5.1/§5.9 exist to prevent when it happens per-case (a case that can't be graded is excluded and reported, never silently zeroed) — but this isn't per-case, it's every case against this model, and the fix (drop one field) is unambiguous and safe. Failing the entire run over a parameter the API itself says is merely deprecated (not that the request is otherwise malformed) would be pedantic at the cost of the tool actually working against a real, current model.
+
+**What this costs:** for models where the parameter truly is rejected, the tool cannot force temperature 0 via this parameter, and whatever sampling behavior the model defaults to is what actually runs — a real, open gap against the temperature-0 guarantee, not resolved by this fallback, only kept from being a hard crash. `variants.temperature` still records the *configured* value (what `.env`/`--temperature` asked for) — it does not claim the API call actually honored it. If Anthropic exposes a different determinism control for these newer models, this fallback should be replaced with using it, not left in place indefinitely.
+
+**Found live, not predicted:** first real `llmreg run` against `claude-sonnet-5` (Phase 3's exit-criteria verification, run on the user's machine since this sandbox has no real API access) failed on 5/5 cases with this exact error before the fallback was added.
