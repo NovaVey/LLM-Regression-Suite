@@ -43,8 +43,23 @@ Created via the Railway API, in the existing **Upwork Portfolio** project (per i
 
 No credentials are written to any file in this repo — they go in the user's local `.env` (gitignored) and, later, GitHub Actions secrets for Phase 8.
 
-## Open questions for the CHECKPOINT
+**Connectivity confirmed from the user's own machine.** First retest after the TCP proxy came up reported `database: unreachable (DATABASE_URL is not set)` — a real bug, not a Railway problem: `checkDatabaseReachable()` returned a bare boolean, so `doctor` could only ever print `unreachable` with no reason. Fixed to return the same `{ reachable, error }` shape the Anthropic check already used (see `docs/DECISIONS.md` and commit `800bdb8`). That surfaced the actual cause — `.env` had the key names but no values after `=` — which the user then fixed. Final result, from `node --env-file=.env packages/cli/dist/index.js doctor` on the user's Windows machine:
 
-1. `ANTHROPIC_API_KEY` with credit and a spend limit set — this can only come from the user's own Anthropic account.
-2. Confirmation that `TARGET_MODEL=claude-sonnet-5` / `JUDGE_MODEL=claude-opus-5` (already in `.env.example` per §2) are the right pins, or should change.
-3. Whether the user can confirm `DATABASE_URL` connectivity from their own machine, since this session's sandbox couldn't verify it directly.
+```
+target model : claude-sonnet-5
+judge model  : claude-opus-5
+database     : reachable
+anthropic api: reachable
+```
+
+**Considered and declined: moving the database to Supabase.** The user has an existing "Upwork Portfolio" Supabase project; asked whether to use it instead of Railway once the connectivity issue surfaced. Inspecting it first showed it already has a `crm` schema plus live `auth`/`storage` — real infrastructure backing other client-facing apps, not empty. Given a choice between that shared production database and the dedicated, isolated Railway Postgres already matching §2, the user chose to keep debugging Railway rather than share blast radius with other client work. It turned out not to be a Railway problem at all — see above.
+
+## Phase 0 — CHECKPOINT CLOSED
+
+All three items resolved:
+
+1. Railway `DATABASE_URL` — reachable, verified on the user's machine with real credentials.
+2. `ANTHROPIC_API_KEY` — set, with credit (verified reachable via `models.retrieve`, which needs a valid, working key). Spend limit not independently re-confirmed here, but §2 only requires it "before Phase 3" (the first phase that spends real API budget at volume) — revisit then, not blocking Phase 1.
+3. `TARGET_MODEL=claude-sonnet-5` / `JUDGE_MODEL=claude-opus-5` — confirmed valid: `models.retrieve` succeeded for both against the user's real account.
+
+Proceeding to Phase 1.
