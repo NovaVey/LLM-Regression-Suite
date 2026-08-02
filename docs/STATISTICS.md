@@ -1,0 +1,106 @@
+# Statistics
+
+This document explains, in plain language, every statistical method this tool uses, and the assumptions each one carries. It is written for someone deciding whether to trust a number the tool prints, not for someone who already trusts statistics blindly — be skeptical, that is the correct posture.
+
+We are not statisticians by training. Every method below is standard, textbook material — nothing here is novel or exotic. We implement it in-repo rather than pulling from a library so it can be verified line by line and unit-tested against known answers (see `docs/DECISIONS.md`). Where we made a judgment call between two reasonable standard choices, that call and the alternative are recorded there too.
+
+This file grows with the project: Phase 5 will add a section on judge calibration (Cohen's kappa), and Phase 6 will add the simulation results (null model false positive rate, power curve, MDE validation) that turn everything below from "should be correct" into "measured to be correct." What follows covers Phase 1 — the four pure functions in `packages/core/src/stats/`.
+
+## 1. Paired comparison, not two independent runs
+
+Before any of the tests below run, every case gets a **per-case difference**: `d_i = candidate_i − baseline_i`, computed only for cases that produced a valid result under both variants. Cases that errored under either variant are excluded from the statistic and reported separately as an infrastructure error — never scored as a zero, because a timeout is not a quality failure and treating it as one is how a flaky network becomes a manufactured regression.
+
+**Why pairing matters:** cases in a real eval suite vary enormously in difficulty. A hard case might score 0.3 under both variants; an easy one might score 0.95 under both. If you computed the mean score for baseline and the mean score for candidate separately and subtracted, that between-case variance in difficulty would swamp almost any real effect of the prompt change you're trying to measure. Pairing sidesteps this entirely: each case is compared only to itself. All the statistics below — the bootstrap CI and McNemar's test — operate on this vector of per-case differences (or per-case pass/fail pairs), never on two separate summary numbers.
+
+**Assumption:** the two variants ran on *identical* inputs per case. If the candidate saw a different input than the baseline for a given `external_id`, the "pairing" is fiction and every downstream number is wrong.
+
+## 2. The confidence interval: percentile bootstrap
+
+**File:** `packages/core/src/stats/bootstrap.ts` — `bootstrapCI(differences, iterations, alpha)`
+
+**What it does.** Given the vector of per-case differences, resample it with replacement `iterations` times (each resample is the same size as the original, drawn case-by-case with replacement), recompute the mean of each resample, and take the `alpha/2` and `1 - alpha/2` percentiles of that distribution of resampled means as the confidence interval. The point estimate reported alongside it is the plain mean of the original (non-resampled) differences.
+
+**Why bootstrap instead of a t-test.** A t-test's confidence interval assumes the underlying data (or at least the sampling distribution of the mean) is approximately normal. LLM evaluation scores routinely violate that: judge scores pile up at the top of a bounded 0–1 scale, pass/fail differences are literally three-valued (−1, 0, +1), and score distributions are often bimodal (the model either nails a case or badly misses it, rarely in between). The bootstrap makes no assumption about the shape of the distribution — it estimates the sampling distribution of the mean directly from the data itself, by pretending the observed sample *is* the population and repeatedly drawing from it.
+
+**Assumptions:**
+
+- **Exchangeability of cases.** The core assumption is that every difference `d_i` is interchangeable with every other `d_i` for the purpose of resampling — there's no hidden structure (ordering effects, drift over the course of a run, clusters of near-duplicate cases, several cases coming from the same underlying conversation) that would make some cases systematically more alike than others in a way the resampling can't see. If that assumption is wrong — say, later cases in a run systematically score worse because of a rate-limit-induced pattern — the bootstrap interval will be too narrow: it has no way to widen for correlation it isn't told about.
+- **No distributional assumption on the differences themselves.** This is the whole point of using the bootstrap. It only assumes the observed sample of differences is a reasonable stand-in for the full population of differences you'd see if you ran every possible case.
+- **The percentile method specifically** (as opposed to more sophisticated bootstrap variants like BCa or the bootstrap-t) is known to under-cover — i.e., produce intervals slightly narrower than they should be — when the sample is small or the differences are strongly skewed. It is the simplest bootstrap CI to implement and verify by hand, and it is adequate at the sample sizes this tool targets (the example suite in §11 of the spec is 240 cases), but it is not the most statistically refined option that exists. See `docs/DECISIONS.md` for the alternative considered.
+
+**Verified against:** a sample of 500 points drawn from a known Normal(2.5, 8) distribution. The bootstrap's 95% CI came out at `[1.4166, 2.8357]` against the closed-form analytic interval `mean ± 1.95996 × sampleSD/√n = [1.4242, 2.8299]` — within 5% of the interval's width, well inside expected Monte Carlo noise at 20,000 bootstrap iterations. Full numbers are in the Phase 1 verification output.
+
+## 3. McNemar's test, for binary pass/fail outcomes
+
+**File:** `packages/core/src/stats/mcnemar.ts` — `mcnemarTest(baselinePass, candidatePass)`
+
+**What it does.** For paired binary (pass/fail) outcomes, builds the 2×2 table of how each case's pass/fail status moved between baseline and candidate, and tests whether the two directions of disagreement — "passed under baseline, failed under candidate" (`discordantB`) versus "failed under baseline, passed under candidate" (`discordantC`) — are asymmetric enough to not be explained by chance.
+
+**Why only discordant pairs matter.** A case that passed under *both* variants, or failed under *both*, tells you nothing about whether the change moved anything — it's evidence the variants agree on that case, not evidence about the difference between them. If a case is scored the same under both variants, whether it happens to be a pass or a fail is irrelevant to the question "did this change something." McNemar's test is built entirely around this: it looks only at the pairs that flipped, and ignores the pairs that agree. Concordant pairs are counted during grading and reporting (e.g. "232 of 240 cases unchanged") but they never enter the statistic itself — including them would dilute the signal with cases that carry zero information about the change.
+
+**The statistic.** This implementation always applies **Edwards' continuity correction**:
+
+```
+statistic = (|b - c| - 1)² / (b + c)
+```
+
+rather than the uncorrected `(b - c)² / (b + c)`. This is the standard default for McNemar's test — it's what R's `mcnemar.test()` applies unless the caller explicitly turns it off — and it matters most exactly where this tool spends most of its time: eval suites in the tens-to-low-hundreds of cases, where the number of discordant pairs (`b + c`) is often well under 50. The correction exists because `b − c` is a discrete quantity being approximated by a continuous chi-square distribution; without the correction, the resulting p-value is anti-conservative (too small) when `b + c` is small. At large `b + c` the correction's effect vanishes to nothing, so there's no accuracy given up at scale.
+
+**The p-value.** Derived from the chi-square distribution with 1 degree of freedom, computed via the identity that if `Z ~ N(0,1)` then `Z² ~ chi-square(1)`, so `P(chi-square > x) = 2 × (1 − Φ(√x))` where `Φ` is the standard normal CDF. `Φ` itself is a hand-written numerical approximation (Abramowitz & Stegun 7.1.26 for the error function) — see `packages/core/src/stats/normal-distribution.ts`. This sidesteps needing a general chi-square/gamma CDF: McNemar's statistic always has exactly 1 degree of freedom, so that's the only case this code needs to handle.
+
+**Assumptions:**
+
+- **Paired binary outcomes on identical cases**, same requirement as everything else in this document — `baselinePass[i]` and `candidatePass[i]` must describe the same case under each variant.
+- **Only discordant pairs carry information**, as above — concordant pairs are correctly and deliberately excluded from the statistic.
+- **Independence across cases.** If the dataset contains duplicated or near-duplicated inputs, the discordant-pair counts are effectively inflated relative to the number of truly independent observations, and the test becomes over-confident — the same failure mode as the bootstrap's exchangeability assumption, described in different terms.
+- **Enough discordant pairs to matter.** With single-digit `b + c`, the test has very little power and any p-value it produces should be read as indicative at best.
+
+**Verified against:** a small case with `b=9, c=3` (12 discordant pairs total), computed two independent ways:
+1. Hand-computed continuity-corrected statistic: `(|9−3|−1)²/12 = 25/12 = 2.083333`, matching the function's output exactly.
+2. An independently-derived **exact binomial two-sided p-value** (not the same math path as the chi-square approximation): under the null, `discordantB ~ Binomial(12, 0.5)`, so `p = 2 × P(X ≤ 3) = 2 × 299/4096 = 0.145996`. The function's continuity-corrected chi-square approximation gave `p = 0.148915` — close to the exact value, with the small remaining gap being the expected, well-documented behavior of the chi-square approximation to the exact binomial test (the reason the continuity correction exists in the first place is to narrow exactly this gap).
+
+A larger case (`b=121, c=59`, 180 discordant pairs, 314 total) was also checked: hand-computed statistic `20.672222` matched the function's output exactly, with `p = 5.4554 × 10⁻⁶`.
+
+A separate check confirmed that changing the *concordant* counts (`a` and `d`) while holding `b` and `c` fixed does not change the statistic or p-value at all, as required.
+
+## 4. Minimum detectable effect (MDE)
+
+**File:** `packages/core/src/stats/mde.ts` — `minimumDetectableEffect(differenceSD, n, alpha, power)`
+
+**What it does.** Reports the smallest true effect that a paired comparison of this size and this per-case variability could detect, at the given significance level and desired statistical power. This is reported *before* any verdict, every time, per §5.4 of the spec — it's the single most useful number in the report, because "no detectable difference" on a 40-case suite that can only see effects above 15 points is a very different finding from the same words on a 240-case suite that can see effects above 2 points.
+
+**The formula:**
+
+```
+MDE = (z_(alpha/2) + z_power) × differenceSD / √n
+```
+
+where `z_(alpha/2)` is the two-sided critical value (≈1.96 at alpha=0.05) and `z_power` is the one-sided quantile for the desired power (≈0.84 at power=0.8). Both are computed with a hand-written inverse normal CDF (Peter Acklam's rational approximation, in `normal-distribution.ts`).
+
+This comes directly from treating the comparison as a **one-sample test on the vector of per-case differences** — pairing (§1 above) already turned what would otherwise be a two-independent-samples problem into a one-sample problem, so the standard error is `differenceSD/√n`, not the `√2 × SD/√n` you'd use for two separate arms. This is the standard power-analysis formula for sizing a one-sample or paired test.
+
+**Assumptions:**
+
+- **Normal approximation (z-scores), not the exact t-distribution.** This slightly *understates* the true MDE at small n — a t critical value is larger than the corresponding z critical value at small degrees of freedom, so the real required effect is a bit bigger than what this formula reports. The gap shrinks fast (under roughly 1% by n≈60) and matters least exactly where this tool is meant to run (the example suite targets 240 cases). Implementing the exact t-quantile requires inverting the incomplete beta function — real added complexity for a correction that's marginal at the sample sizes in scope. See `docs/DECISIONS.md`.
+- **`differenceSD` is the sample standard deviation of the same per-case differences fed to the bootstrap.** This function doesn't compute it — consistent with the pure-function, no-I/O contract, it takes already-known summary statistics and returns a number.
+- **Two-sided.** The reported MDE is for detecting an effect in *either* direction at the stated power — matching the two-sided percentile bootstrap CI used for the verdict.
+- **Must match the empirical power curve.** Per §6.3 of the spec, this formula is only trustworthy once it's checked against Phase 6's simulated power curve — if the formula says 5 points but simulated data shows only 50% detection at 5 points, the formula (or one of the assumptions above) is wrong. That full validation is Phase 6's job. As a smaller sanity check run during Phase 1: at `SD=10, n=100, alpha=0.05, power=0.8`, the formula reports `MDE=2.801585`; simulating 5,000 trials with a true effect exactly equal to that MDE and testing at alpha=0.05 rejected the null **80.02%** of the time (z-test proxy), and a second simulation using the actual `bootstrapCI` function (400 trials, 1,500 bootstrap iterations each, both statistical detection methods completely independent of the MDE formula's derivation) detected the effect **79.50%** of the time — both very close to the target 80%.
+
+## 5. Verdict logic
+
+**File:** `packages/core/src/stats/verdict.ts` — `determineVerdict(input)`
+
+**What it does.** Combines the outputs of the sections above — the bootstrap CI bounds, the MDE, the paired sample size, and a count of critical-tagged cases that regressed — into exactly one of four words. This function contains no statistics of its own; it is pure decision logic, and it trusts its inputs completely. If a caller passes in a CI computed from unpaired data, or the wrong alpha, this function has no way to detect that and will produce a confidently wrong verdict from correct-looking logic.
+
+**The four verdicts, and the precedence between them (this order matters and is enforced exactly, not just approximately):**
+
+1. **`regression`** — the aggregate CI's upper bound is entirely below zero (i.e. even the most optimistic end of the interval says the candidate is worse), **or** at least one critical-tagged case regressed. This check runs first and overrides every other consideration, including whether the aggregate sample was otherwise too small to trust. A single critical case regressing fails the check regardless of what the rest of the aggregate statistic says — a change that fixes twenty easy cases and breaks the one about refund eligibility is still a bad change.
+2. **`insufficient_data`** — the MDE exceeds a configured ceiling, or the paired sample size is below a configured floor. Checked only once regression has been ruled out, and it wins over what the CI alone would otherwise suggest: a CI that happens to sit entirely above zero on 8 paired cases is not "improvement detected," it's a dataset too small to trust either way.
+3. **`improvement_detected`** — the CI's lower bound is entirely above zero. Named "detected," deliberately not "proven" or "confirmed" — see below.
+4. **`no_detectable_difference`** — none of the above; the interval spans zero and the dataset was adequate to say so honestly.
+
+**Why `no_detectable_difference` and `insufficient_data` are kept as two distinct outcomes, not one.** "We looked and found nothing" and "we couldn't have found anything smaller than the ceiling even if it were there" are different findings that call for different next actions — the first says the change is probably fine at the resolution this suite can see; the second says go build a bigger suite before trusting any verdict from this one. Merging them into a single "no significant difference" (as most naive eval tools do) is exactly the failure mode this tool exists to avoid.
+
+**Why this tool never says "improved" outright.** `improvement_detected` is the strongest positive verdict this function can return, and its name is deliberately not "proven better." A tool that tells a team a noisy 40-case suite shows their change is "good" trains that team to ship on noise, and the first time that backfires in production is the last time anyone trusts the tool. The narrower claim — "we detected evidence of an improvement, at this sample size and this significance level" — is the one that survives a skeptical engineer asking follow-up questions.
+
+**Verified against:** 13 hand-constructed input combinations covering every branch and every precedence interaction described above — including deliberately adversarial cases like a fully-improving CI paired with `criticalRegressed > 0` (must still return `regression`), a fully-regressing CI paired with `mde` far over ceiling (must still return `regression`, not `insufficient_data`), and boundary cases at exactly zero / exactly the ceiling / exactly the floor (must fall to the non-triggered side, since every threshold in this function is a strict inequality). All 13 passed against their expected verdict.
