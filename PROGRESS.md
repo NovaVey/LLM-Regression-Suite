@@ -28,8 +28,21 @@ Tracks state: files touched per phase, delegations, open questions. See `docs/DE
 - Health check reports db + Anthropic reachable, prints both pinned model IDs — the code path exists (`llmreg doctor`) and was verified to **fail closed** correctly: with no env vars set, it prints `(TARGET_MODEL not set)` / `(JUDGE_MODEL not set)`, reports both database and Anthropic API as unreachable, and exits `3` (infrastructure failure, per §7). It **cannot report an actual pass** without real `DATABASE_URL` and `ANTHROPIC_API_KEY` values — that's the CHECKPOINT blocker by design (rule 5: never invent an API key, connection string, or model ID).
 - `packages/web` also verified independently: `tsc --noEmit` and `vite build` both succeed against the bumped Vite 8 / Tailwind 3 toolchain.
 
+## Railway Postgres provisioned
+
+Created via the Railway API, in the existing **Upwork Portfolio** project (per instruction — not a new project), production environment, alongside the account's other services:
+
+- Service: `Postgres-LLMRegSuite` (id `0f2bbd77-b045-4ce6-a15a-9c7961408a61`), image `ghcr.io/railwayapp-templates/postgres-ssl:18` — same image the account's other Postgres services already run, found by inspecting one of them rather than guessing.
+- Persistent volume attached at `/var/lib/postgresql/data` (`postgres-llmregsuite-volume`) — without this the database resets on every redeploy.
+- Database name `llmreg` (not the default `railway`, since this account has multiple Postgres instances and a generic name would be confusing later).
+- Deployed and verified healthy: runtime logs show `database system is ready to accept connections`.
+
+**Gap: no public connectivity yet.** The private `DATABASE_URL` (`...@postgres-llmregsuite.railway.internal:5432/llmreg`) only resolves from inside Railway's private network. Our CLI/CI run outside it (locally, in GitHub Actions), so they need the public/proxy URL instead. Railway's GraphQL API exposes a `TCPProxyCreateInput` type but — confirmed via full schema introspection, not a guess — no matching `tcpProxyCreate` mutation; only `tcpProxyDelete` exists. Rather than guess at an undocumented mechanism against a real account with client services on it, this is called out to the user directly: enable a TCP Proxy on `Postgres-LLMRegSuite` → Settings → Networking (one dashboard action), then the public `DATABASE_URL`/`DATABASE_PUBLIC_URL` can be read back via the API.
+
+No credentials are written to any file in this repo — they go in the user's local `.env` (gitignored) and, later, GitHub Actions secrets for Phase 8.
+
 ## Open questions for the CHECKPOINT
 
-1. Railway `DATABASE_URL` — needed to verify db reachability.
-2. `ANTHROPIC_API_KEY` with credit and a spend limit set — needed to verify Anthropic reachability.
+1. Enable the TCP Proxy on `Postgres-LLMRegSuite` (Railway dashboard → that service → Settings → Networking → TCP Proxy) so the database is reachable from outside Railway's private network — then I can pull the public `DATABASE_URL`.
+2. `ANTHROPIC_API_KEY` with credit and a spend limit set — this can only come from the user's own Anthropic account.
 3. Confirmation that `TARGET_MODEL=claude-sonnet-5` / `JUDGE_MODEL=claude-opus-5` (already in `.env.example` per §2) are the right pins, or should change.
