@@ -5,5 +5,5 @@ export {
   getAnthropicClient,
   getJudgeModel,
   getTargetModel,
-  type ReachabilityResult,
 } from './anthropic.js';
+export type { ReachabilityResult } from './types.js';

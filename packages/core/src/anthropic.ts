@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
+import type { ReachabilityResult } from './types.js';
 
 let client: Anthropic | undefined;
 
@@ -27,11 +28,6 @@ export function getJudgeModel(): string {
     throw new Error('JUDGE_MODEL is not set');
   }
   return model;
-}
-
-export interface ReachabilityResult {
-  reachable: boolean;
-  error?: string;
 }
 
 // Uses models.retrieve rather than a completion call: it confirms both the API

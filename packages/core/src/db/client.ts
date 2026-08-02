@@ -1,5 +1,6 @@
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
+import type { ReachabilityResult } from '../types.js';
 import * as schema from './schema.js';
 
 let pool: Pool | undefined;
@@ -19,12 +20,12 @@ export function getDb() {
   return drizzle(getPool(), { schema });
 }
 
-export async function checkDatabaseReachable(): Promise<boolean> {
+export async function checkDatabaseReachable(): Promise<ReachabilityResult> {
   try {
     await getPool().query('select 1');
-    return true;
-  } catch {
-    return false;
+    return { reachable: true };
+  } catch (err) {
+    return { reachable: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
 

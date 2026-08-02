@@ -36,8 +36,10 @@ program
     console.log(`target model : ${targetModel ?? '(TARGET_MODEL not set)'}`);
     console.log(`judge model  : ${judgeModel ?? '(JUDGE_MODEL not set)'}`);
 
-    const dbReachable = await checkDatabaseReachable();
-    console.log(`database     : ${dbReachable ? 'reachable' : 'unreachable'}`);
+    const db = await checkDatabaseReachable();
+    console.log(
+      `database     : ${db.reachable ? 'reachable' : `unreachable (${db.error ?? 'unknown error'})`}`
+    );
 
     const anthropic = await checkAnthropicReachable();
     console.log(
@@ -46,7 +48,7 @@ program
       }`
     );
 
-    if (!targetModel || !judgeModel || !dbReachable || !anthropic.reachable) {
+    if (!targetModel || !judgeModel || !db.reachable || !anthropic.reachable) {
       process.exitCode = 3; // infrastructure failure, per §7 exit codes
     }
   });
