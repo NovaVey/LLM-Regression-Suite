@@ -116,3 +116,21 @@ I have not changed the implementation to split these two triggers apart, for two
 **Alternative:** Zod — the de facto standard for this in a TypeScript codebase, would cut the validation code by more than half and centralize the schema as data rather than procedural checks.
 
 **Why it lost:** Not in §2's stack, so same as above — rule 6 says ask first, and there was a zero-new-dependency option that satisfies the actual requirement (Phase 2's exit criteria: "validation rejects a malformed config with a specific message"). More specifically here, though: this repo's whole posture in `docs/DECISIONS.md`'s very first entry is that dependencies in places the tool must be trustworthy are worth writing by hand so they can be verified line by line — config validation is exactly this project's first line of "fails loudly, never silently, with a specific reason" (§5.9), and a library's generic error shape (`"invalid_type" at path ["thresholds", "significanceAlpha"]`) would need translating into this project's voice (`thresholds.significanceAlpha must be strictly between 0 and 1, got 5`) regardless of which approach was used. Revisit if the validation surface grows enough (many more config shapes, e.g. per-grader config schemas in Phase 3) that hand-rolling becomes the more error-prone option — that's a real tradeoff Zod would win eventually, just not yet.
+
+## Phase 3
+
+### Retry/backoff delegates to the Anthropic SDK's built-in `maxRetries`, not a hand-rolled loop
+
+**Decision:** `callTarget()` in `packages/core/src/anthropic.ts` passes `{ maxRetries: 3 }` as a per-request option to `anthropic.messages.create()` rather than wrapping the call in an application-level retry loop.
+
+**Alternative:** Hand-roll retry/backoff (matching this repo's general stance of writing verifiable logic in-repo — the stats module, the dataset validator).
+
+**Why it lost:** Checked the installed SDK's source directly rather than assuming: it already retries exactly the transient conditions worth retrying — HTTP 429 and >=500 — with exponential backoff, and that logic is officially maintained by Anthropic against their own API's actual failure modes. Hand-rolling would mean re-deriving the same two conditions and shipping a strictly worse, unmaintained copy of logic the vendor SDK (already a dependency, already trusted for every other call in this repo) gets for free. This is a different situation from the stats/dataset-validation calls elsewhere in this file: those were about auditability of *novel, project-specific* logic where a library's correctness can't be taken on faith; HTTP retry/backoff for a well-known vendor API is neither novel nor project-specific, and the SDK's behavior is directly inspectable (and was inspected) rather than trusted blindly.
+
+### `json_schema` grader is a hand-rolled subset (`type`/`required`/`properties`/`items`/`enum`), not a library
+
+**Decision:** `packages/core/src/graders/json.ts` implements a small recursive validator supporting only `type`, `required`, `properties`, `items`, and `enum` — no `$ref`, `oneOf`/`anyOf`/`allOf`, `pattern`, `format`, or numeric bounds.
+
+**Alternative:** `ajv`, the standard JSON Schema validator for Node/TypeScript, which would give full draft-07/2020-12 compliance.
+
+**Why it lost:** Same reasoning as Phase 2's dataset validation and the in-repo statistics module (§2, and the very first entry in this file): `ajv` isn't in §2's stack, and rule 6 asks that dependencies outside it be raised before adding — there was a zero-dependency option (a documented subset) that satisfies what this grader is actually for, which is checking that a target's structured output roughly matches an expected shape, not acting as a general-purpose schema validator. The subset covers what real grader configs are likely to need (an object with required fields of known types, an array of a known item type, an enum of allowed values) without the surface area of the full spec. Revisit if a real use case needs `oneOf`/`$ref`/pattern matching that the subset genuinely can't express — that's a real ceiling this approach has, unlike the stats functions which don't have an analogous "eventually you'll need the full thing" pressure.

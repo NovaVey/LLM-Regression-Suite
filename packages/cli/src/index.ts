@@ -7,6 +7,7 @@ import {
   getTargetModel,
 } from '@llmreg/core';
 import { runInit } from './commands/init.js';
+import { closeDb, runRunCommand } from './commands/run.js';
 
 function readEnv(fn: () => string): string | undefined {
   try {
@@ -64,6 +65,54 @@ program
       console.log(`Scaffolded suite config: ${suitePath}`);
       console.log(`Scaffolded example dataset (2 cases): ${casesPath}`);
       console.log('Edit both, then run `llmreg run` once the runner is built (Phase 3).');
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 3;
+    }
+  });
+
+program
+  .command('run')
+  .description('Run a suite against the target model, cache-aware.')
+  .requiredOption('--suite <path>', 'path to suite.json')
+  .requiredOption('--dataset <path>', 'path to dataset.json')
+  .requiredOption('--label <label>', 'variant label — "baseline", "candidate", or a git sha')
+  .option('--system-prompt-file <path>', 'path to a text file with this variant\'s system prompt')
+  .option('--model <model>', 'overrides TARGET_MODEL')
+  .option('--temperature <n>', 'overrides TARGET_TEMPERATURE', Number)
+  .option('--max-concurrency <n>', 'overrides MAX_CONCURRENCY', Number)
+  .option('--sample-count <n>', "repeat-sampling count per case, per §5.3 (default 1)", Number)
+  .option('--no-cache', 'disable the response cache for this run')
+  .option('--limit <n>', 'only run the first N cases from the dataset', Number)
+  .action(async (opts) => {
+    try {
+      const outcome = await runRunCommand({
+        suite: opts.suite,
+        dataset: opts.dataset,
+        label: opts.label,
+        ...(opts.systemPromptFile !== undefined ? { systemPromptFile: opts.systemPromptFile } : {}),
+        ...(opts.model !== undefined ? { model: opts.model } : {}),
+        ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
+        ...(opts.maxConcurrency !== undefined ? { maxConcurrency: opts.maxConcurrency } : {}),
+        ...(opts.sampleCount !== undefined ? { sampleCount: opts.sampleCount } : {}),
+        cache: opts.cache,
+        ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
+      });
+
+      console.log(`Run ${outcome.runId} complete.`);
+      console.log(
+        `  cases: ${outcome.caseCount}, samples: ${outcome.sampleCount}, cache hits: ${outcome.cacheHits} (${(outcome.cacheHitRate * 100).toFixed(1)}%)`,
+      );
+      console.log(`  errors: ${outcome.errorCount}`);
+      for (const e of outcome.errors) {
+        console.log(`    - ${e.externalId} (sample ${e.sampleIndex}): ${e.error}`);
+      }
+
+      await closeDb();
+
+      if (outcome.sampleCount > 0 && outcome.errorCount === outcome.sampleCount) {
+        process.exitCode = 3; // every single call failed -- infrastructure failure, per §7
+      }
     } catch (err) {
       console.error(err instanceof Error ? err.message : String(err));
       process.exitCode = 3;
