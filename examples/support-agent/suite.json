@@ -1,0 +1,16 @@
+{
+  "name": "support-agent",
+  "description": "The support-agent demo suite (see README.md for the dataset). Only the latency grader is wired so far — content-quality grading needs a calibrated judge, which is Phase 5 work. Deterministic graders (exact/contains/regex/json_schema) aren't attached because every case's `expected` is intentionally null (see README.md's \"What's in dataset.json\" section); a `judge:helpfulness`-style grader is the natural next addition once Phase 5 exists.",
+  "graders": [
+    {
+      "name": "latency",
+      "config": { "maxLatencyMs": 10000 }
+    }
+  ],
+  "thresholds": {
+    "significanceAlpha": 0.05,
+    "mdeCeiling": 0.1,
+    "minPairedN": 30,
+    "judgeKappaFloor": 0.6
+  }
+}
