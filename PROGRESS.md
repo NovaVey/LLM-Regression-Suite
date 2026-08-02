@@ -85,3 +85,27 @@ Proceeding to Phase 1.
 ## Phase 1 — CHECKPOINT
 
 Bootstrap CI recovering a known interval and McNemar matching a hand-computed example — both demonstrated with real, independently-verified numbers above and in `docs/STATISTICS.md`.
+
+## Phase 2 — Dataset + suite config
+
+**Split three ways, concurrently:** main agent built the schema/loader/CLI infrastructure; `dataset-curator` authored the 240-case dataset; `test-author` wrote the loader/split tests from spec. All three worked from one interface contract (`Case`/`GraderConfig`/`SuiteConfig` + the exact `loadSuiteConfig`/`loadCases`/`stratifiedSample` signatures) the main agent defined upfront, so none blocked on the others.
+
+**Files:**
+- `packages/core/src/dataset/{schema,load,split}.ts` — types, hand-rolled validation (`DatasetValidationError` with a specific, field-naming message on every malformed path), and a deterministic stratified sampler for Phase 5's calibration draw.
+- `packages/cli/src/commands/init.ts` — `llmreg init [directory]` scaffolds `suite.json` + a 2-case `dataset.json`, refuses to overwrite.
+- `packages/core/test/dataset/{load,split}.test.ts` — 38 tests, every guard verified to fail red against a deliberately-broken independent reference implementation before the real one was read (it wasn't read at all, per the discipline).
+- `examples/support-agent/dataset.json` — 240 cases, 30 critical, full tag coverage (`refunds`/`escalation`/`out-of-scope`/`tone`/`safety` × `clean`/`ambiguous`/`adversarial`/`edge`). No prompt variants — explicitly Phase 10's job.
+- `examples/support-agent/README.md` — case counts, critical-case breakdown by what they protect, coverage gaps named explicitly (English-only, shallow multi-turn, no tool-use, sparse sub-tags, single fictional policy).
+- `docs/DECISIONS.md` — two new entries: JSON over YAML, hand-rolled validation over Zod (both to avoid a dependency outside §2 when a zero-dependency option already satisfied the requirement).
+
+**Independently re-verified by the main agent, not trusted from either subagent's self-report:**
+- Ran the real `loadCases()` against `dataset.json` directly — 240 cases, 30 critical, all `externalId`s unique, passes strict validation with zero errors.
+- Recomputed every number in the README from the raw file myself (tag counts, difficulty counts, the full cross-tab, multi-turn count, structural invariants) — all matched exactly.
+- Grepped the dataset for real-looking emails, phone numbers, and card numbers — none found.
+- Ran the full 56-test suite and full `tsc -b` build after every commit in this phase.
+
+**Incident, self-caught by the subagent, independently reconfirmed clean by the main agent:** `test-author`'s scratch-verification method (drop an independent reference implementation into `src/dataset/`, run tests, restore) collided with the main agent committing real files into the same shared working tree mid-run — briefly overwriting/deleting committed files. Caught via `git status`, fixed via `git restore`, and the main agent independently reconfirmed afterward (`git diff HEAD` empty, full build and 56/56 tests green). Process note for future delegations: have subagents do this kind of scratch verification in an isolated location, not the real source tree, to remove the collision risk rather than rely on catching it.
+
+**Exit criteria status:** the example support-agent suite loads with 240 cases — met, independently verified. Validation rejects a malformed config with a specific message — met: 9+ distinct malformations each produce a message naming the exact field and problem (see `docs/DECISIONS.md` and the test suite).
+
+No CHECKPOINT for Phase 2 per §9. Proceeding to Phase 3 (runner + cache + deterministic graders) once given the go-ahead.
