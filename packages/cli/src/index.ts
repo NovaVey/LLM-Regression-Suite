@@ -3,11 +3,13 @@ import { Command } from 'commander';
 import {
   checkAnthropicReachable,
   checkDatabaseReachable,
+  closeDb,
   getJudgeModel,
   getTargetModel,
+  runMigrations,
 } from '@llmreg/core';
 import { runInit } from './commands/init.js';
-import { closeDb, runRunCommand } from './commands/run.js';
+import { runRunCommand } from './commands/run.js';
 
 function readEnv(fn: () => string): string | undefined {
   try {
@@ -65,6 +67,27 @@ program
       console.log(`Scaffolded suite config: ${suitePath}`);
       console.log(`Scaffolded example dataset (2 cases): ${casesPath}`);
       console.log('Edit both, then run `llmreg run` once the runner is built (Phase 3).');
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 3;
+    }
+  });
+
+program
+  .command('migrate')
+  .description('Apply pending database migrations (idempotent — safe to run repeatedly).')
+  .action(async () => {
+    try {
+      const { applied, alreadyApplied } = await runMigrations();
+      if (applied.length === 0) {
+        console.log(`Nothing to apply — ${alreadyApplied.length} migration(s) already up to date.`);
+      } else {
+        console.log(`Applied ${applied.length} migration(s):`);
+        for (const f of applied) {
+          console.log(`  - ${f}`);
+        }
+      }
+      await closeDb();
     } catch (err) {
       console.error(err instanceof Error ? err.message : String(err));
       process.exitCode = 3;

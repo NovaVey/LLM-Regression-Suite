@@ -1,6 +1,5 @@
 import { readFileSync } from 'node:fs';
 import {
-  closeDb,
   createVariant,
   ensureCases,
   ensureSuite,
@@ -92,5 +91,3 @@ export async function runRunCommand(options: RunCommandOptions): Promise<RunComm
     errors: errored.map((r) => ({ externalId: r.externalId, sampleIndex: r.sampleIndex, error: r.error })),
   };
 }
-
-export { closeDb };

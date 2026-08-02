@@ -1,5 +1,7 @@
 export * as schema from './db/schema.js';
 export { checkDatabaseReachable, closeDb, getDb, getPool } from './db/client.js';
+export { runMigrations } from './db/migrate.js';
+export type { MigrationResult } from './db/migrate.js';
 export {
   callTarget,
   checkAnthropicReachable,
