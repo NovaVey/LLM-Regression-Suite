@@ -63,3 +63,25 @@ All three items resolved:
 3. `TARGET_MODEL=claude-sonnet-5` / `JUDGE_MODEL=claude-opus-5` — confirmed valid: `models.retrieve` succeeded for both against the user's real account.
 
 Proceeding to Phase 1.
+
+## Phase 1 — Statistics core
+
+**Delegated per §14:** `statistician` (implementation) and `test-author` (tests) ran concurrently, from an interface contract the main agent defined upfront from §5 so neither needed to see the other's work. `test-author` never read `packages/core/src/stats/`, confirmed via its own `git status` check.
+
+**Files:**
+- `packages/core/src/stats/{bootstrap,mcnemar,mde,verdict}.ts` — the four contracted pure functions, plus `normal-distribution.ts` (shared erf / inverse-normal-CDF / chi-square(1) numerics both mcnemar.ts and mde.ts need — not one of the four contracted files, added to avoid duplicating ~40 lines twice).
+- `packages/core/test/stats/{bootstrap,mcnemar,mde,verdict}.test.ts` — 18 tests, each independently confirmed able to fail: `test-author` built its own reference implementations from spec, ran the real tests against them, then injected 11 distinct realistic bugs one at a time and confirmed each test catches its target before restoring.
+- `docs/STATISTICS.md` — new; plain-language sections for pairing, bootstrap CI, McNemar, MDE, verdict logic, each with assumptions and real verification numbers.
+- `docs/DECISIONS.md` — four new Phase 1 entries (continuity correction, percentile-vs-BCa bootstrap, z-vs-t MDE approximation, verdict precedence).
+
+**Real disagreement caught and resolved:** `test-author` derived the uncorrected McNemar statistic from §5.2 alone (which doesn't specify correction) and its test initially failed against `statistician`'s continuity-corrected implementation — the exact scenario concurrent from-spec delegation exists to catch. Resolved in favor of the implementation (matches R's `mcnemar.test()` default; the uncorrected form is anti-conservative exactly at the small discordant-pair counts this tool's target suite sizes will often hit, which cuts against §6.1's false-positive-rate mandate). Full reasoning in `docs/DECISIONS.md`.
+
+**Open question, documented not guessed at:** both agents independently flagged the same verdict-precedence gap — whether `pairedN < minPairedN` should gate a CI-based `regression` the way it gates `insufficient_data`. No test currently asserts either answer. Left as current behavior (regression overrides unconditionally), explicitly deferred to Phase 4 (first real caller) and Phase 6 (empirical false-positive check) rather than resolved by a third round of armchair reasoning in this file.
+
+**Independently re-verified by the main agent** (not just trusting either subagent's self-report): reran the actual functions against a fresh random sample and the adversarial verdict cases before the first commit; reran the full test suite and full `tsc -b` build after the McNemar fix.
+
+**Exit criteria status:** statistics module fully unit-tested with no dependency on the rest of the repo — met. 18/18 tests pass, full build clean.
+
+## Phase 1 — CHECKPOINT
+
+Bootstrap CI recovering a known interval and McNemar matching a hand-computed example — both demonstrated with real, independently-verified numbers above and in `docs/STATISTICS.md`.
