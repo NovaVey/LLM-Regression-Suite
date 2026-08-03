@@ -8,6 +8,7 @@ import {
   getTargetModel,
   runMigrations,
 } from '@llmreg/core';
+import { runCompareCommand } from './commands/compare.js';
 import { runInit } from './commands/init.js';
 import { runRunCommand } from './commands/run.js';
 
@@ -135,6 +136,41 @@ program
 
       if (outcome.sampleCount > 0 && outcome.errorCount === outcome.sampleCount) {
         process.exitCode = 3; // every single call failed -- infrastructure failure, per §7
+      }
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 3;
+    }
+  });
+
+program
+  .command('compare')
+  .description('Paired comparison of a baseline run against a candidate run; writes a comparison row.')
+  .requiredOption('--suite <path>', 'path to suite.json (for graders and thresholds)')
+  .requiredOption('--baseline-run <id>', 'baseline run id')
+  .requiredOption('--candidate-run <id>', 'candidate run id')
+  .option('--bootstrap-iterations <n>', 'overrides BOOTSTRAP_ITERATIONS', Number)
+  .action(async (opts) => {
+    try {
+      const outcome = await runCompareCommand({
+        suite: opts.suite,
+        baselineRun: opts.baselineRun,
+        candidateRun: opts.candidateRun,
+        ...(opts.bootstrapIterations !== undefined ? { bootstrapIterations: opts.bootstrapIterations } : {}),
+      });
+
+      const fmt = (n: number): string => (Number.isFinite(n) ? n.toFixed(4) : String(n));
+      console.log(`Comparison ${outcome.comparisonId} complete.`);
+      console.log(`  verdict: ${outcome.verdict}`);
+      console.log(`  delta: ${fmt(outcome.delta)}  CI: [${fmt(outcome.ciLower)}, ${fmt(outcome.ciUpper)}]  MDE: ${fmt(outcome.mde)}`);
+      console.log(
+        `  paired: ${outcome.pairedCaseCount}  excluded: ${outcome.excludedCount}  regressed: ${outcome.regressedCount}  fixed: ${outcome.fixedCount}  critical regressed: ${outcome.criticalRegressed}`,
+      );
+
+      if (outcome.verdict === 'regression') {
+        process.exitCode = 1;
+      } else if (outcome.verdict === 'insufficient_data') {
+        process.exitCode = 2;
       }
     } catch (err) {
       console.error(err instanceof Error ? err.message : String(err));

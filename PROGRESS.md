@@ -148,3 +148,27 @@ Run 6541ca02-4919-454f-8f3c-bc8a318cdcc8 complete.
 - "A single case erroring does not fail the run and is reported as an error, not a zero" — met, verified via 20 automated tests (including `one-failing-case-does-not-abort-the-run`, each confirmed able to fail against a targeted broken reference implementation) plus the main agent's own local DB-backed verification with a synthetic failing case, rather than by deliberately breaking a real API call just to watch it happen live.
 
 No CHECKPOINT for Phase 3 per §9. Proceeding to Phase 4 (comparison engine) once given the go-ahead.
+
+## Phase 4 — Comparison engine
+
+**Owner:** `statistician` for the pure math (`pairing.ts`, `statistics.ts`) per §14 ("Phase 4 comparison math"), concurrently with `test-author` (Comparison test bucket, from spec) and a dedicated adversarial-review agent (spec + implementation, hunting specifically for false-regression/false-clear bugs) — orchestrated as a background Workflow given how consequential this file is. Main agent built `compare.ts` (DB orchestration) and the `llmreg compare` CLI concurrently against the same interface contract.
+
+**Files:**
+- `packages/core/src/comparison/pairing.ts` — `pairCases()`, per §5.1. Partitions cases into `paired` and `excluded` (5 reason codes), `difference = candidate − baseline`.
+- `packages/core/src/comparison/statistics.ts` — `computeComparison()`. Wires all four Phase 1 primitives (bootstrap CI drives the verdict; McNemar always additionally computed as supplementary evidence over the same regressed/fixed counts, never overrides); regressed/fixed defined by pass/fail flip, not raw score movement; explicit `pairedCaseCount === 0` short-circuit (MDE = `Infinity`, not `0` — "cannot detect anything" must not read as "detects everything").
+- `packages/core/src/comparison/compare.ts` (main agent) — fetches case_results/grades/cases for both runs, computes each case's weighted-average score (using `GraderConfig.weight`, previously-dead configuration), handles partial repeat-sample failure (errored only if *every* sample errored), calls pairing + statistics, persists to `comparisons`.
+- `packages/cli`: `llmreg compare --suite --baseline-run --candidate-run [--bootstrap-iterations]`.
+- `packages/core/test/comparison/{pairing,statistics}.test.ts` — 18 tests, the §10 Comparison bucket plus internal-consistency checks (McNemar b/c === regressed/fixed counts exactly).
+- `docs/STATISTICS.md` — new "Comparison engine" section. `docs/DECISIONS.md` — statistician's entries (regressed/fixed-by-flip, bootstrap-always-drives-verdict, the n=0 value choices, the critical-flag OR-conflict resolution) plus the main agent's own (weighted scoring, partial-repeat-sample-failure handling).
+
+**Adversarial review — 32 tests total (18 spec-derived + 14 self-authored adversarial), zero real bugs found.** Specifically tried and failed to break: null-score leakage into `paired`, exclusion-reason correctness across all 5 reason codes simultaneously, the `pairedCaseCount===0` short-circuit actually avoiding `bootstrapCI`, difference sign, McNemar/regressed-fixed internal consistency, critical-override precedence (including against `insufficient_data`, not just the CI-based checks), and self-comparison exactness. Full findings in the workflow transcript; I independently read both implementation files myself before accepting this, rather than relying on the report alone.
+
+**One real interaction issue caught by `statistician` reading the concurrently-built `compare.ts`:** an `Infinity` MDE (the `pairedCaseCount===0` path) serializing to a Postgres `numeric` column via `String(Infinity)`. Verified directly — both raw SQL and the actual Drizzle insert path — that Postgres 14+ (confirmed: the local Postgres 16 used for testing, and Railway's Postgres 18 target) accepts the literal `'Infinity'` for `numeric`. No code change needed; confirmed rather than assumed.
+
+**Exit criteria — verified end-to-end against a real local Postgres (fresh migration, real `persistRun`+`compareRuns` calls, not mocked):**
+
+- Self-comparison → `delta: 0` (exact), `CI: [0, 0]` (contains 0), `verdict: no_detectable_difference`. ✓ (literal §9 Phase 4 wording)
+- Deliberately broken variant (5 injected regressions, one critical) → `verdict: regression`, `regressedExternalIds` exactly the 5 injected cases, `criticalRegressed: 1`, and the *persisted* `comparisons.regressed_case_ids` (real case UUIDs, not externalIds) matched exactly. ✓ (literal §9 Phase 4 wording: "the right case list")
+- Bonus: all-cases-excluded (`pairedCaseCount === 0`) → no throw, `verdict: insufficient_data`, `Infinity` MDE persisted and read back correctly.
+
+No CHECKPOINT for Phase 4 per §9. Proceeding to Phase 5 (judge grader + calibration) once given the go-ahead — that phase has a CHECKPOINT.

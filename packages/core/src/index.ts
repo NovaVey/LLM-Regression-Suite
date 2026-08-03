@@ -33,3 +33,9 @@ export type {
 } from './runner/execute.js';
 export { createVariant, ensureCases, ensureSuite, persistRun } from './runner/persist.js';
 export type { PersistRunResult, VariantInput } from './runner/persist.js';
+export { pairCases } from './comparison/pairing.js';
+export type { CaseOutcome, Exclusion, ExclusionReason, PairedCase, PairingResult } from './comparison/pairing.js';
+export { computeComparison } from './comparison/statistics.js';
+export type { ComparisonStats, RegressionComparisonInput } from './comparison/statistics.js';
+export { compareRuns } from './comparison/compare.js';
+export type { CompareRunsParams, CompareRunsResult } from './comparison/compare.js';

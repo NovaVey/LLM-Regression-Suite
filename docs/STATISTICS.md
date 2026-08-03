@@ -104,3 +104,60 @@ This comes directly from treating the comparison as a **one-sample test on the v
 **Why this tool never says "improved" outright.** `improvement_detected` is the strongest positive verdict this function can return, and its name is deliberately not "proven better." A tool that tells a team a noisy 40-case suite shows their change is "good" trains that team to ship on noise, and the first time that backfires in production is the last time anyone trusts the tool. The narrower claim — "we detected evidence of an improvement, at this sample size and this significance level" — is the one that survives a skeptical engineer asking follow-up questions.
 
 **Verified against:** 13 hand-constructed input combinations covering every branch and every precedence interaction described above — including deliberately adversarial cases like a fully-improving CI paired with `criticalRegressed > 0` (must still return `regression`), a fully-regressing CI paired with `mde` far over ceiling (must still return `regression`, not `insufficient_data`), and boundary cases at exactly zero / exactly the ceiling / exactly the floor (must fall to the non-triggered side, since every threshold in this function is a strict inequality). All 13 passed against their expected verdict.
+
+## 6. The comparison engine — wiring pairing to the four primitives
+
+**Files:** `packages/core/src/comparison/pairing.ts` (`pairCases`) and `packages/core/src/comparison/statistics.ts` (`computeComparison`).
+
+Sections 1–5 above cover the four pure statistical primitives in isolation. This section covers how Phase 4 wires them together into one comparison, per §5.1/§5.6 of the spec. Like everything above it, both files are pure functions over plain data — no database, no API calls, no file reads.
+
+### 6.1 Pairing
+
+`pairCases(baseline, candidate)` takes two arrays of per-case outcomes — one row per case per run, each either a valid `{ score, passed }` or `{ score: null, passed: null }` for a case that errored on that side — and produces two lists:
+
+- `paired`: cases with a valid, non-null result on **both** sides. Each entry carries `difference = candidateScore - baselineScore` (§5.1's `d_i`), the exact quantity every downstream statistic operates on.
+- `excluded`: every other case, tagged with *why* it didn't pair — `errored-baseline`, `errored-candidate`, `errored-both` (present on both sides but at least one side failed), or `missing-baseline`/`missing-candidate` (present on only one side at all).
+
+A case's own `externalId` never appears in both lists — the two lists partition the full set of `externalId`s seen across both inputs. This is what makes §5.1's rule concrete: *"A case that errored on one side is excluded from the comparison and reported separately as an error, never silently scored zero."* An excluded case contributes nothing to any mean, any CI, any McNemar count — it is reported to the user as an infrastructure problem, not folded into the statistic as if the model produced a bad answer.
+
+`critical` is carried onto each paired case for use downstream (the critical-case override, §6.3 below). Since `critical` is a property of the underlying dataset case rather than of a specific run, both sides should agree on it; if they don't (a data inconsistency pairing can't rule out from its inputs alone), pairing takes the logical OR of the two sides — treating a case as critical if *either* side says so, since under-flagging a critical case is the more dangerous failure direction here.
+
+### 6.2 Combining the four primitives
+
+`computeComparison` takes the `paired` list from `pairCases` (never the `excluded` list — nothing excluded ever enters a statistic) plus the run's thresholds (`alpha`, `mdeCeiling`, `minPairedN`, `bootstrapIterations`, and optionally `power`, which defaults to 0.8 — the value used everywhere the spec's own prose discusses power) and:
+
+1. Computes `regressedExternalIds` / `fixedExternalIds` / `criticalRegressed` directly from the paired list's pass/fail flips (§6.4 below).
+2. Runs `bootstrapCI` on the vector of `difference`s to get the point estimate (`delta`) and the 95% interval (`ciLower`/`ciUpper`).
+3. Computes the sample standard deviation of the same differences and feeds it into `minimumDetectableEffect` to get `mde`.
+4. Runs `mcnemarTest` on the paired `baselinePassed`/`candidatePassed` arrays as supplementary evidence (§6.5 below).
+5. Feeds `ciLower`, `ciUpper`, `mde`, `mdeCeiling`, the paired count, `minPairedN`, and `criticalRegressed` into `determineVerdict` to get the one word a human reads.
+
+**The verdict is always driven by the bootstrap CI, never by McNemar.** This is a specific reading of the `comparisons` table (§4 of the spec), which has a single `test`/`p_value` pair, not one per statistical method, and of `verdict.ts`'s signature, which only accepts a CI (`ciLower`/`ciUpper`), not a McNemar result. McNemar is always additionally computed (whenever there's at least one paired case) and reported on the result — its `discordantB`/`discordantC` counts are a second, independently-derived check that the regressed/fixed counts are internally consistent (§6.4) — but it never substitutes for the bootstrap CI in deciding the verdict. `test` is therefore always reported as `'paired_bootstrap'`, and the top-level `pValue` is always `null`: the percentile bootstrap as implemented doesn't produce a formal p-value (that would require the full vector of resampled means, which `BootstrapResult` doesn't expose), and McNemar's own p-value stays on `mcnemar.pValue` rather than being copied into a top-level field that's documented as describing the named `test`. See `docs/DECISIONS.md` for the alternative (a McNemar-driven verdict path for binary-only suites) and why it was deferred rather than built now.
+
+### 6.3 The critical-case override, concretely
+
+Per §5.6, a critical-tagged case regressing fails the check "regardless of the aggregate statistic." Concretely: `computeComparison` counts `criticalRegressed` independently of the CI, and passes it straight into `determineVerdict`, whose first branch is `ciUpper < 0 || criticalRegressed > 0`. A suite where 29 easy cases all improved and 1 critical case flipped from passing to failing will have a CI sitting entirely above zero (the aggregate looks like a strict improvement) — and still returns `verdict: 'regression'`, because the critical-case check runs first and short-circuits everything below it. Verified with real numbers in the Phase 4 verification output: CI `[0.30, 0.40]` (fully positive), `criticalRegressed: 1`, verdict `regression`.
+
+### 6.4 Regressed and fixed are defined by a pass/fail flip, not raw score movement
+
+```
+regressed: baselinePassed === true  && candidatePassed === false
+fixed:     baselinePassed === false && candidatePassed === true
+```
+
+A case whose score moved (say 0.9 → 0.7) but whose pass/fail status didn't is not counted as "regressed" here — a raw-score-movement definition would make `criticalRegressed` and the PR comment's "regressed cases" table (§5.8) sensitive to threshold noise inside the passing band, which is exactly the kind of noise the rest of this document argues against chasing. This definition is also what keeps McNemar's `discordantB`/`discordantC` in exact agreement with `regressedExternalIds.length`/`fixedExternalIds.length` — both are counting the same flips, from the same paired list, by construction. That agreement is asserted directly in the Phase 4 verification (see below), not just assumed.
+
+### 6.5 The `pairedCaseCount === 0` edge case
+
+`bootstrapCI` throws on an empty array by design (Phase 1's own contract: "requires at least one difference"). If every case in the suite errored on at least one side, `paired` is empty and there is nothing to bootstrap, nothing to run McNemar on, and no real delta to report. `computeComparison` short-circuits before calling any Phase 1 primitive in this case, rather than letting that error propagate up as an unhandled crash, and returns:
+
+- `delta: 0`, `ciLower: 0`, `ciUpper: 0` — there is no data to compute a real point estimate or interval from. Reporting `[0, 0]` alongside `insufficient_data` (not `no_detectable_difference`) is the honest way to say "nothing was measured," rather than accidentally reading as a legitimate zero-effect finding.
+- `mde: Infinity`, deliberately not `0`. The MDE means "the smallest true difference this dataset could reliably detect." With zero paired cases, the dataset cannot reliably detect *any* effect, no matter how large — reporting `0` would claim perfect sensitivity, the exact opposite of the truth, and the opposite failure direction from the one §5.4 exists to prevent (an under-reported MDE hiding a suite's blind spots).
+- `mcnemar: null` — nothing to compute McNemar over.
+- `verdict: 'insufficient_data'` — not `no_detectable_difference`. Zero paired cases is the clearest possible instance of "this dataset could not have found anything," never "we looked and found nothing."
+
+Verified directly: a case list where every case errors on at least one side (one of each of `errored-baseline`, `errored-candidate`, and `missing-baseline`) produces `paired.length === 0` from `pairCases`, and `computeComparison` returns the exact result above without throwing.
+
+### 6.6 A known small-n artifact in the MDE, and why it's not special-cased here
+
+With exactly one paired case, the sample standard deviation of a single value is undefined by the usual Bessel-corrected formula (division by `n - 1 = 0`); `computeComparison` returns `0` for that case rather than `NaN`, and `minimumDetectableEffect` already treats `differenceSD === 0` as "any nonzero true effect would be detected with certainty" (`mde = 0`). Read literally at `n = 1` that's backwards — one case tells you almost nothing about the dataset's sensitivity. This isn't special-cased in `computeComparison` because it doesn't need to be: `determineVerdict`'s `pairedN < minPairedN` branch already catches it for any sane `minPairedN` (which should always be well above 1), producing `insufficient_data` regardless of what the MDE formula reports at that n. Documented here rather than silently patched, per `docs/DECISIONS.md`.
