@@ -12,7 +12,7 @@ export {
 export type { TargetCallResult, TargetMessage } from './anthropic.js';
 export type { ReachabilityResult } from './types.js';
 export { DatasetValidationError, loadCases, loadSuiteConfig } from './dataset/load.js';
-export { stratifiedSample } from './dataset/split.js';
+export { mulberry32, stratifiedSample } from './dataset/split.js';
 export type { Case, CaseMessage, GraderConfig, SuiteConfig } from './dataset/schema.js';
 export { getGrader } from './graders/registry.js';
 export type { GraderContext, GradeResult, Grader } from './graders/types.js';
