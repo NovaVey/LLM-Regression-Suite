@@ -12,17 +12,29 @@
  */
 
 import { eq, inArray } from 'drizzle-orm';
+import { getJudgeModel } from '../anthropic.js';
 import { getDb } from '../db/client.js';
 import { caseResults, cases as casesTable, comparisons, grades, runs } from '../db/schema.js';
-import type { SuiteConfig } from '../dataset/schema.js';
+import type { GraderConfig, SuiteConfig } from '../dataset/schema.js';
+import { checkCalibrationGate } from '../judge/calibration.js';
+import { hashPromptTemplate } from '../runner/cache.js';
+import { buildJudgeSystemPrompt, rubricFromGraderConfig } from '../judge/prompt.js';
+import { getCalibrationsForGrader } from '../judge/persist.js';
 import { averagePerCaseScores, type GradedSample } from '../runner/execute.js';
 import { pairCases, type CaseOutcome, type Exclusion } from './pairing.js';
 import { computeComparison, type ComparisonStats } from './statistics.js';
 
+/**
+ * Returns the weighted average of `graderScores`, or `null` if there is
+ * nothing usable to average (either no grades at all, or every grade that
+ * exists belongs to a grader weighted to 0 — see `resolveJudgeGraderWeights`).
+ * `null` here means the same thing it means throughout pairing.ts: no valid
+ * result for this sample, not a real score of 0.
+ */
 function weightedScore(
   graderScores: Array<{ grader: string; score: number }>,
   graderWeights: Map<string, number>,
-): number {
+): number | null {
   let weightedSum = 0;
   let totalWeight = 0;
   for (const g of graderScores) {
@@ -30,7 +42,64 @@ function weightedScore(
     weightedSum += g.score * weight;
     totalWeight += weight;
   }
-  return totalWeight === 0 ? 0 : weightedSum / totalWeight;
+  return totalWeight === 0 ? null : weightedSum / totalWeight;
+}
+
+/**
+ * Checks the §5.5 calibration gate for every `judge:*` grader in the suite
+ * config, against the CURRENT judge model and the prompt hash computed from
+ * the CURRENT suite config's rubric.
+ *
+ * A known limitation, not silently glossed over: `grades` does not record
+ * which judge_prompt_hash produced a given historical grade (§4's schema
+ * has no such column, and this file follows that schema rather than
+ * unilaterally extending it — see docs/DECISIONS.md). This function can
+ * only verify "does a passing calibration exist for the rubric in the
+ * suite config I was handed right now" — it cannot detect a run whose
+ * grades were computed under a since-edited rubric. In the normal workflow
+ * (compare two runs freshly generated from the current suite config, which
+ * is what `llmreg run` + `llmreg compare` naturally produce back to back)
+ * this gap doesn't manifest; it's a real gap for someone deliberately
+ * comparing two old runs after editing the rubric in between.
+ *
+ * Throws (rejecting the whole comparison, per §5.5: "rejected, not warned
+ * about") for any judge grader with no matching calibration at all.
+ * Returns the set of grader names whose calibration matched but failed
+ * (kappa below floor) — these must not drive the verdict, per §5.5:
+ * "reports its scores as advisory only, never as a blocking verdict."
+ */
+async function checkJudgeCalibrationGates(
+  suiteId: string,
+  judgeGraders: GraderConfig[],
+  judgeModel: string,
+): Promise<Set<string>> {
+  const advisoryGraders = new Set<string>();
+
+  for (const g of judgeGraders) {
+    const rubric = rubricFromGraderConfig(g);
+    const judgePromptHash = hashPromptTemplate(buildJudgeSystemPrompt(rubric));
+
+    const calibrations = await getCalibrationsForGrader(suiteId, g.name);
+    const gate = checkCalibrationGate(calibrations, judgeModel, judgePromptHash);
+
+    if (gate.status === 'missing') {
+      throw new Error(
+        `Judge \`${rubric.name}\` has no passing calibration. Run \`llmreg calibrate --grader ${g.name}\`.`,
+      );
+    }
+    if (gate.status === 'failing') {
+      advisoryGraders.add(g.name);
+    }
+  }
+
+  return advisoryGraders;
+}
+
+/** graderWeights with every advisory (failing-calibration) judge grader's weight forced to 0. */
+function resolveJudgeGraderWeights(suiteConfig: SuiteConfig, advisoryGraders: Set<string>): Map<string, number> {
+  return new Map(
+    suiteConfig.graders.map((g) => [g.name, advisoryGraders.has(g.name) ? 0 : (g.weight ?? 1)]),
+  );
 }
 
 interface RunCaseData {
@@ -106,6 +175,12 @@ async function loadRunCaseData(runId: string, graderWeights: Map<string, number>
     }
 
     const score = weightedScore(caseGrades, graderWeights);
+    if (score === null) {
+      // Every grade recorded for this sample belongs to a grader weighted
+      // to 0 (an advisory judge grader) -- nothing usable to score it on,
+      // same treatment as the caseGrades.length === 0 branch above.
+      continue;
+    }
     gradedSamples.push({ externalId: row.externalId, sampleIndex: row.sampleIndex, score, passed: score >= 0.5 });
   }
 
@@ -131,6 +206,8 @@ export interface CompareRunsParams {
   suiteConfig: SuiteConfig;
   bootstrapIterations: number;
   power?: number;
+  /** Judge model to check calibration gates against; defaults to getJudgeModel(). */
+  judgeModel?: string;
 }
 
 export interface CompareRunsResult {
@@ -158,7 +235,10 @@ export async function compareRuns(params: CompareRunsParams): Promise<CompareRun
     );
   }
 
-  const graderWeights = new Map(params.suiteConfig.graders.map((g) => [g.name, g.weight ?? 1]));
+  const judgeGraders = params.suiteConfig.graders.filter((g) => g.name.startsWith('judge:'));
+  const judgeModel = params.judgeModel ?? getJudgeModel();
+  const advisoryGraders = await checkJudgeCalibrationGates(baselineRun.suiteId, judgeGraders, judgeModel);
+  const graderWeights = resolveJudgeGraderWeights(params.suiteConfig, advisoryGraders);
 
   const [baselineData, candidateData] = await Promise.all([
     loadRunCaseData(params.baselineRunId, graderWeights),

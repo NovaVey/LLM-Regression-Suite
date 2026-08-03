@@ -8,6 +8,7 @@ import {
   getTargetModel,
   runMigrations,
 } from '@llmreg/core';
+import { runCalibrateCommand } from './commands/calibrate.js';
 import { runCompareCommand } from './commands/compare.js';
 import { runInit } from './commands/init.js';
 import { runRunCommand } from './commands/run.js';
@@ -171,6 +172,55 @@ program
         process.exitCode = 1;
       } else if (outcome.verdict === 'insufficient_data') {
         process.exitCode = 2;
+      }
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 3;
+    }
+  });
+
+program
+  .command('calibrate')
+  .description('Label a sample of judge-graded outputs and compute Cohen\'s kappa against the judge (§5.5).')
+  .requiredOption('--suite <path>', 'path to suite.json')
+  .requiredOption('--run <id>', 'run id to sample judge-graded outputs from')
+  .requiredOption('--grader <name>', 'the judge:* grader to calibrate, e.g. judge:helpfulness')
+  .option('--sample-size <n>', 'stratified sample size, per §5.5 (100-300 recommended)', Number)
+  .option('--seed <n>', 'stratified-sample seed, for a reproducible sample', Number)
+  .option('--labeled-by <name>', 'identifier recorded on each label (defaults to $USER)')
+  .option(
+    '--labels-file <path>',
+    'JSON file of { externalId: score } -- skips interactive prompting (scripted/synthetic labeling only; a real calibration labels interactively)',
+  )
+  .option('--judge-model <model>', 'overrides JUDGE_MODEL for the calibration gate check')
+  .action(async (opts) => {
+    try {
+      const outcome = await runCalibrateCommand({
+        suite: opts.suite,
+        run: opts.run,
+        grader: opts.grader,
+        ...(opts.sampleSize !== undefined ? { sampleSize: opts.sampleSize } : {}),
+        ...(opts.seed !== undefined ? { seed: opts.seed } : {}),
+        ...(opts.labeledBy !== undefined ? { labeledBy: opts.labeledBy } : {}),
+        ...(opts.labelsFile !== undefined ? { labelsFile: opts.labelsFile } : {}),
+        ...(opts.judgeModel !== undefined ? { judgeModel: opts.judgeModel } : {}),
+      });
+
+      console.log(`\nCalibration ${outcome.calibrationId} saved for "${outcome.grader}" (${outcome.judgeModel}).`);
+      console.log(`  sampled: ${outcome.sampledCount}  labeled+matched: ${outcome.labelCount}`);
+      console.log(
+        `  cohen's kappa: ${outcome.cohensKappa.toFixed(3)}  raw agreement: ${(outcome.agreementRate * 100).toFixed(1)}%  floor: ${outcome.judgeKappaFloor}`,
+      );
+      console.log(
+        `  confusion matrix: bothPass=${outcome.confusionMatrix.bothPass} humanPassJudgeFail=${outcome.confusionMatrix.humanPassJudgeFail} humanFailJudgePass=${outcome.confusionMatrix.humanFailJudgePass} bothFail=${outcome.confusionMatrix.bothFail}`,
+      );
+      console.log(`  bias: ${outcome.biasNote}`);
+      console.log(`  result: ${outcome.passed ? 'PASSED — this judge may now drive a blocking verdict' : 'FAILED — judge scores remain advisory-only until recalibrated'}`);
+
+      await closeDb();
+
+      if (!outcome.passed) {
+        process.exitCode = 2; // uncalibrated/failing judge -- warn-level per §7 exit codes
       }
     } catch (err) {
       console.error(err instanceof Error ? err.message : String(err));

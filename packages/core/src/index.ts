@@ -39,3 +39,27 @@ export { computeComparison } from './comparison/statistics.js';
 export type { ComparisonStats, RegressionComparisonInput } from './comparison/statistics.js';
 export { compareRuns } from './comparison/compare.js';
 export type { CompareRunsParams, CompareRunsResult } from './comparison/compare.js';
+export { buildJudgeSystemPrompt, buildJudgeUserMessage, rubricFromGraderConfig } from './judge/prompt.js';
+export type { JudgeRubric } from './judge/prompt.js';
+export { callJudge } from './judge/call.js';
+export type { JudgeCallResult } from './judge/call.js';
+export { cohensKappa } from './judge/kappa.js';
+export type { ConfusionMatrix, KappaResult } from './judge/kappa.js';
+export { checkCalibrationGate, computeBiasNote, matchLabelsToJudgeGrades } from './judge/calibration.js';
+export type {
+  CalibrationRecord,
+  GateStatus,
+  HumanLabelRecord,
+  JudgeGradeRecord,
+  MatchedLabel,
+} from './judge/calibration.js';
+export {
+  getCalibrationsForGrader,
+  getHumanLabelsForGrader,
+  getJudgeGradesForCalibration,
+  getRunOutputsForCalibration,
+  hashOutput,
+  recordHumanLabel,
+  saveCalibration,
+} from './judge/persist.js';
+export type { SampledOutput } from './judge/persist.js';

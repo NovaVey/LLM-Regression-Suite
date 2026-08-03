@@ -172,3 +172,61 @@ No CHECKPOINT for Phase 3 per §9. Proceeding to Phase 4 (comparison engine) onc
 - Bonus: all-cases-excluded (`pairedCaseCount === 0`) → no throw, `verdict: insufficient_data`, `Infinity` MDE persisted and read back correctly.
 
 No CHECKPOINT for Phase 4 per §9. Proceeding to Phase 5 (judge grader + calibration) once given the go-ahead — that phase has a CHECKPOINT.
+
+## Phase 5 — Judge grader + calibration
+
+**Owner:** `statistician` for `judge/kappa.ts` (Cohen's kappa), concurrently with `test-author` (Judge test bucket, from spec) — a background Workflow, per §14 ("kappa implementation" is statistician's). Main agent built the judge prompt/call, the runner's judge-grading integration, the calibration DB layer, the CLI's `llmreg calibrate`, and the calibration-gate enforcement inside `compare.ts`.
+
+**Files:**
+
+- `packages/core/src/judge/prompt.ts` — `buildJudgeSystemPrompt()` (the stable, hashed part: rubric + required-rationale response format) / `buildJudgeUserMessage()` (per-case, unhashed: conversation + candidate output). `rubricFromGraderConfig()` derives a `JudgeRubric` from a suite config's `judge:<name>` grader entry — shared by the runner, the comparison gate, and the calibrate CLI so all three hash an identical prompt for an identical rubric.
+- `packages/core/src/judge/call.ts` — `callJudge()`, reusing Phase 3's `callTarget()` (same retry/backoff, same temperature-deprecation fallback) rather than duplicating it. `parseJudgeResponse()` validates `score ∈ [0,1]` and a non-empty `rationale`, throwing `JudgeResponseError` otherwise.
+- `packages/core/src/judge/kappa.ts` (statistician) — `cohensKappa()`, standard unweighted 2-category Cohen's kappa. Explicit `Pe === 1` degenerate-case handling (returns `0`, not `NaN`/`1`/throw — see `docs/DECISIONS.md`).
+- `packages/core/src/judge/calibration.ts` (main agent, pure) — `matchLabelsToJudgeGrades()` (pairs by `output_hash` only, per §5.5, never by `case_id`), `checkCalibrationGate()` (`passing`/`failing`/`missing`, matched against the *current* judge model + prompt hash), `computeBiasNote()`.
+- `packages/core/src/judge/persist.ts` — DB-coupled: `hashOutput()` (sha256, computed on demand — no stored column), `getRunOutputsForCalibration()`, `getJudgeGradesForCalibration()`, `recordHumanLabel()`, `getHumanLabelsForGrader()`, `saveCalibration()`, `getCalibrationsForGrader()`.
+- `packages/core/src/runner/persist.ts` (modified) — `persistRun()` now always performs judge grading for every `judge:*` grader (isolated per-(case,grader) failure, logged not thrown — a judge call failing is a materially smaller blast radius than the case itself erroring). The calibration gate is enforced downstream in `compare.ts`, not here — grading and trusting a grade are kept as separate questions.
+- `packages/core/src/comparison/compare.ts` (modified) — `checkJudgeCalibrationGates()` throws the exact §5.5-specified rejection for any `judge:*` grader with `status: 'missing'`; graders with `status: 'failing'` go into an `advisoryGraders` set. `resolveJudgeGraderWeights()` forces those graders' weight to `0`. `weightedScore()` now returns `null` (not a false `0`) when every grade for a sample belongs to a zero-weighted grader, and `loadRunCaseData()` treats that identically to "no grades recorded at all" — the case is excluded from pairing, never scored as a fabricated zero.
+- `packages/cli/src/commands/calibrate.ts` + `llmreg calibrate` — stratified-samples a run's judge-graded outputs (Phase 2's `stratifiedSample`, grouped by tag), labels them either interactively (`readline/promises`) or via `--labels-file` (a scripted/synthetic-labeling escape hatch — see `docs/DECISIONS.md`), computes kappa, and calls `saveCalibration()`.
+- `packages/core/test/judge/{kappa,calibration}.test.ts` (test-author) — 14 tests: the three §10-named Judge-bucket tests (`an-uncalibrated-judge-cannot-produce-a-blocking-verdict`, `human-labels-attach-to-outputs-not-cases`, `changing-the-judge-prompt-invalidates-the-calibration`) plus the textbook-kappa, rubber-stamp-judge, `Pe===1`, and stale-calibration-precedence cases.
+- `docs/STATISTICS.md` — new §7 (Cohen's kappa: what it measures, the `Po`/`Pe` derivation, the `Pe===1` edge case, assumptions). `docs/DECISIONS.md` — statistician's kappa entries (the `Pe===1` return-`0` choice and its three rejected alternatives; standard vs. weighted kappa) plus the main agent's own (missing-vs-failing gate behavior; the accepted `judge_prompt_hash`-column gap; `--labels-file` as a build-verification-only escape hatch).
+
+**A real, accepted schema gap, not silently patched:** `grades` (§4's schema, followed verbatim) has no `judge_prompt_hash` column — only `judge_model`. The calibration gate can therefore only check a run's judge grades against the rubric hash in the *current* suite config, not whatever hash actually produced a given run's historical grades. This doesn't affect the normal `llmreg run` → `llmreg compare` workflow (both runs are always freshly graded under whatever's current), only the narrow case of comparing two old runs after editing the rubric in between. Extending §4's schema unilaterally to close this was considered and rejected — see `docs/DECISIONS.md`.
+
+**Exit criteria — verified mechanically against a real local Postgres, using clearly-disclosed SYNTHETIC labels.** This sandbox has no real Anthropic API access (confirmed since Phase 0) and no human available to type 100–300 real judgments, so neither a genuine judge call nor a genuine labeling session could happen here. What *was* run for real: `ensureSuite`/`ensureCases`/`createVariant`, the real `llmreg calibrate` and `llmreg compare` CLI commands, `matchLabelsToJudgeGrades`, `cohensKappa`, `saveCalibration`, and `checkCalibrationGate` — against a real database, with only the judge's own model call and the human's own labeling replaced by synthetic stand-ins, every one labeled `[SYNTHETIC]` in the seed data itself.
+
+1. **`compareRuns()` before any calibration exists → rejected, not warned:**
+   ```
+   Judge `helpfulness` has no passing calibration. Run `llmreg calibrate --grader judge:helpfulness`.
+   ```
+   (exit code 3, via the real `llmreg compare` CLI)
+
+2. **A discriminating judge (synthetic: agrees with synthetic ground truth ~90% of the time) calibrated via the real `llmreg calibrate --labels-file` CLI, 20 stratified-sampled labels:**
+   ```
+   cohen's kappa: 0.615  raw agreement: 90.0%  floor: 0.6
+   confusion matrix: bothPass=16 humanPassJudgeFail=0 humanFailJudgePass=2 bothFail=2
+   result: PASSED — this judge may now drive a blocking verdict
+   ```
+   `llmreg compare` against the same (unedited) suite config then succeeds: `verdict: no_detectable_difference`, `paired: 20`.
+
+3. **§5.5's core claim, demonstrated live, not just asserted:** a rubber-stamp judge (synthetic: always says "pass") calibrated against synthetic ground truth that is honestly 90% pass / 10% fail:
+   ```
+   cohen's kappa: 0.000  raw agreement: 90.0%  floor: 0.6
+   confusion matrix: bothPass=27 humanPassJudgeFail=0 humanFailJudgePass=3 bothFail=0
+   result: FAILED — judge scores remain advisory-only until recalibrated
+   ```
+   90% raw agreement, 0.000 kappa — exactly §5.5's "scores 90% agreement and knows nothing." `llmreg compare` against two runs graded solely by this failing judge does **not** throw (a `'failing'` calibration is advisory, not rejected): `verdict: insufficient_data`, `paired: 0`, `excluded: 30` — every case's only grader was zeroed out, so there was nothing left to pair, and the tool reports that honestly rather than crashing or fabricating a score.
+
+4. **A stale calibration (rubric edited after calibrating) is rejected exactly like a missing one, through the real CLI:**
+   ```
+   $ llmreg compare --suite <suite-with-edited-rubric.json> --baseline-run <...> --candidate-run <...>
+   Judge `helpfulness` has no passing calibration. Run `llmreg calibrate --grader judge:helpfulness`.
+   ```
+   (exit code 3) — confirming `checkCalibrationGate` correctly reads an edited-rubric hash as `missing`, not as the passing record it no longer matches.
+
+All 108 tests pass (`npx vitest run`); full `tsc -b` build is clean. Verification script and generated suite/label JSON files were kept outside the tracked source tree and were not committed (per the standing rule from the Phase 2 incident) — only the reasoning and the real output above are recorded here.
+
+**Full build + test:** `npm run build` (clean, no errors) and `npx vitest run` → **108/108 passed**.
+
+## Phase 5 — CHECKPOINT
+
+Per §9: "show me the kappa, the confusion matrix, and what happens when I try to compare with a stale calibration." Shown above, all against a real database via the real CLI, using disclosed synthetic data. Stopping here per rule 2 — this is a CHECKPOINT phase, not delegated, and needs the user's own real labels before calibration means anything beyond a pipeline smoke test. See the chat message for the full report and the open ask (100–300 real human labels).
