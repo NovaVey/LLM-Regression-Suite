@@ -1,3 +1,15 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* §8 quality floor: prefers-reduced-motion is respected by never animating
+   anything in the first place (see IntervalBar.tsx's module comment) --
+   this rule is a backstop for anything added later, not a fix for
+   something that currently animates. */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
