@@ -267,7 +267,11 @@ I have not changed the implementation to split these two triggers apart, for two
 
 ## Phase 6
 
-### OPEN QUESTION, raised at the Phase 6 checkpoint rather than resolved unilaterally: is "false positive rate" the one-sided regression rate or the combined two-sided rate?
+### RESOLVED at the Phase 6 checkpoint: is "false positive rate" the one-sided regression rate or the combined two-sided rate?
+
+**User's decision (Phase 6 checkpoint):** leave the statistical construction as-is — `determineVerdict`'s `regression` verdict stays a one-sided read of the existing two-sided `(1-α)` bootstrap CI, no change to `bootstrapCI`'s interval construction or `verdict.ts`'s threshold. The README states both rates precisely (the one-sided `regressionRate`, target `α/2`, and the combined `combinedRate`, target `α`) rather than asserting a single unqualified "~5%" the way §12's own suggested wording did. See `README.md`'s null-model section for the resulting language.
+
+The write-up below is kept in full as the record of what was found and why it was raised, per rule 4 ("this file records reasoning").
 
 This is the most consequential finding of Phase 6, surfaced independently by both `statistician` and `test-author` during their workflow (working from the same contract, without reading each other's output) before either read the other's conclusion — not a single agent's guess.
 
