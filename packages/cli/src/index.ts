@@ -12,6 +12,7 @@ import {
 import { runCalibrateCommand } from './commands/calibrate.js';
 import { runCompareCommand } from './commands/compare.js';
 import { runInit } from './commands/init.js';
+import { runReportCommand } from './commands/report.js';
 import { runRunCommand } from './commands/run.js';
 import {
   runSimulateNull,
@@ -188,6 +189,37 @@ program
       // the same bucket as insufficient_data, "configurable to block") --
       // not an infrastructure failure (3). Anything else genuinely is.
       process.exitCode = err instanceof UncalibratedJudgeError ? 2 : 3;
+    }
+  });
+
+program
+  .command('report')
+  .description('Render a comparison as a PR comment (markdown), API payload (json), or standalone page (html), per §5.8.')
+  .requiredOption('--comparison <id>', 'comparison id (from `llmreg compare`)')
+  .option('--format <format>', 'markdown|json|html', 'markdown')
+  .action(async (opts) => {
+    try {
+      const format = opts.format;
+      if (format !== 'markdown' && format !== 'json' && format !== 'html') {
+        throw new Error(`--format must be one of markdown|json|html, got "${format}"`);
+      }
+
+      const { data, rendered } = await runReportCommand({ comparisonId: opts.comparison, format });
+      console.log(rendered);
+
+      await closeDb();
+
+      // §7: report can serve as the CI check in its own right (e.g. a
+      // GitHub Action step that only runs `report`, not a separate
+      // `compare` step) -- same verdict-to-exit-code mapping as `compare`.
+      if (data.verdict === 'regression') {
+        process.exitCode = 1;
+      } else if (data.verdict === 'insufficient_data') {
+        process.exitCode = 2;
+      }
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 3;
     }
   });
 

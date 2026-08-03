@@ -37,8 +37,22 @@ export { pairCases } from './comparison/pairing.js';
 export type { CaseOutcome, Exclusion, ExclusionReason, PairedCase, PairingResult } from './comparison/pairing.js';
 export { computeComparison } from './comparison/statistics.js';
 export type { ComparisonStats, RegressionComparisonInput } from './comparison/statistics.js';
-export { compareRuns, UncalibratedJudgeError } from './comparison/compare.js';
+export { compareRuns, UncalibratedJudgeError, weightedScore } from './comparison/compare.js';
 export type { CompareRunsParams, CompareRunsResult } from './comparison/compare.js';
+export { loadComparisonReportData } from './report/load.js';
+export type {
+  ComparisonReportData,
+  FixedCaseRow,
+  JudgeCalibrationStatus,
+  MethodsInfo,
+  RegressedCaseRow,
+  Verdict,
+} from './report/types.js';
+export { computeTruncatedDiff, renderDiffBlock } from './report/diff.js';
+export type { DiffOp, DiffOpKind, TruncatedDiffOptions } from './report/diff.js';
+export { renderMarkdownReport, PR_COMMENT_MARKER } from './report/markdown.js';
+export { renderJsonReport } from './report/json.js';
+export { renderHtmlReport } from './report/html.js';
 export { buildJudgeSystemPrompt, buildJudgeUserMessage, rubricFromGraderConfig } from './judge/prompt.js';
 export type { JudgeRubric } from './judge/prompt.js';
 export { callJudge } from './judge/call.js';

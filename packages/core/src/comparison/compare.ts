@@ -44,7 +44,7 @@ export class UncalibratedJudgeError extends Error {}
  * `null` here means the same thing it means throughout pairing.ts: no valid
  * result for this sample, not a real score of 0.
  */
-function weightedScore(
+export function weightedScore(
   graderScores: Array<{ grader: string; score: number }>,
   graderWeights: Map<string, number>,
 ): number | null {
@@ -298,6 +298,7 @@ export async function compareRuns(params: CompareRunsParams): Promise<CompareRun
       regressedCaseIds,
       fixedCaseIds,
       criticalRegressed: stats.criticalRegressed,
+      excludedCaseCount: pairing.excluded.length,
     })
     .returning({ id: comparisons.id });
 
