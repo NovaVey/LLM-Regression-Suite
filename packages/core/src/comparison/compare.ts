@@ -115,7 +115,7 @@ function resolveJudgeGraderWeights(suiteConfig: SuiteConfig, advisoryGraders: Se
   );
 }
 
-interface RunCaseData {
+export interface RunCaseData {
   outcomes: Map<string, CaseOutcome>;
   caseDbIdByExternalId: Map<string, string>;
 }
@@ -127,7 +127,7 @@ interface RunCaseData {
  * samples alone (per §5.3, samples are independently computed) rather than
  * the whole case being discarded over a partial failure.
  */
-async function loadRunCaseData(runId: string, graderWeights: Map<string, number>): Promise<RunCaseData> {
+export async function loadRunCaseData(runId: string, graderWeights: Map<string, number>): Promise<RunCaseData> {
   const db = getDb();
 
   const resultRows = await db

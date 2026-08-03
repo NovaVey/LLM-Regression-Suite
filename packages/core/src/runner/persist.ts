@@ -56,6 +56,7 @@ export async function ensureCases(suiteId: string, caseList: Case[]): Promise<Ma
         expected: c.expected,
         tags: c.tags,
         critical: c.critical,
+        criticalReason: c.criticalReason,
       })),
     )
     .onConflictDoNothing();

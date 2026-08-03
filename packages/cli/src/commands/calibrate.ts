@@ -156,6 +156,7 @@ export async function runCalibrateCommand(options: CalibrateCommandOptions): Pro
     agreementRate: kappa.agreementRate,
     biasNote,
     passed,
+    confusionMatrix: kappa.confusionMatrix,
   });
 
   return {

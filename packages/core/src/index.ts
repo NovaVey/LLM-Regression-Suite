@@ -37,8 +37,8 @@ export { pairCases } from './comparison/pairing.js';
 export type { CaseOutcome, Exclusion, ExclusionReason, PairedCase, PairingResult } from './comparison/pairing.js';
 export { computeComparison } from './comparison/statistics.js';
 export type { ComparisonStats, RegressionComparisonInput } from './comparison/statistics.js';
-export { compareRuns, UncalibratedJudgeError, weightedScore } from './comparison/compare.js';
-export type { CompareRunsParams, CompareRunsResult } from './comparison/compare.js';
+export { compareRuns, loadRunCaseData, UncalibratedJudgeError, weightedScore } from './comparison/compare.js';
+export type { CompareRunsParams, CompareRunsResult, RunCaseData } from './comparison/compare.js';
 export { loadComparisonReportData } from './report/load.js';
 export type {
   ComparisonReportData,
@@ -89,3 +89,29 @@ export { runPairingBenefitSimulation } from './simulations/pairing-benefit.js';
 export type { PairingBenefitParams, PairingBenefitResult } from './simulations/pairing-benefit.js';
 export { runJudgeDriftSimulation } from './simulations/judge-drift.js';
 export type { JudgeDriftParams, JudgeDriftResult } from './simulations/judge-drift.js';
+export {
+  getCalibrationOverview,
+  getCaseDiffDetail,
+  getComparisonCaseList,
+  getComparisonsForSuite,
+  getDatasetOverview,
+  getSuiteList,
+} from './web/load.js';
+export type {
+  CalibrationHistoryEntry,
+  CalibrationOverview,
+  CaseComparisonStatus,
+  CaseDiffData,
+  CaseGradeDetail,
+  ComparisonCaseListItem,
+  ComparisonListItem,
+  DatasetCaseRow,
+  DatasetOverview,
+  GraderCalibrationOverview,
+  SimulationsOverview,
+  SuiteCalibrationSummary,
+  SuiteListItem,
+  TagCoverage,
+} from './web/types.js';
+export { getCalibrationHistoryForSuite } from './judge/persist.js';
+export type { CalibrationHistoryRecord } from './judge/persist.js';
