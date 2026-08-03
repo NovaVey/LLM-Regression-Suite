@@ -60,12 +60,22 @@ export async function runRunCommand(options: RunCommandOptions): Promise<RunComm
     promptHash,
   });
 
+  // No progress output at all until a 240-case run finishes is
+  // indistinguishable from a hang -- see docs/DECISIONS.md. Printed to
+  // stderr so stdout stays just the final summary a caller might parse.
+  const logProgress = (label: string) => (completed: number, total: number) => {
+    if (completed === total || completed % 10 === 0) {
+      process.stderr.write(`  ${label}: ${completed}/${total}\n`);
+    }
+  };
+
   const { results, cacheHits } = await executeRun({
     cases,
     variant: { model, temperature, promptHash, ...(systemPrompt !== undefined ? { systemPrompt } : {}) },
     maxConcurrency,
     sampleCount,
     useCache: options.cache,
+    onProgress: logProgress('running'),
   });
 
   const { runId, cacheHitRate } = await persistRun({
@@ -77,6 +87,7 @@ export async function runRunCommand(options: RunCommandOptions): Promise<RunComm
     executionResults: results,
     cacheHits,
     graders: suiteConfig.graders,
+    onProgress: logProgress('grading'),
   });
 
   const errored = results.filter((r): r is typeof r & { error: string } => r.error !== null);

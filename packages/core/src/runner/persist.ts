@@ -138,6 +138,14 @@ export async function persistRun(params: {
   graders: SuiteConfig['graders'];
   judgeModel?: string;
   judgeTemperature?: number;
+  /**
+   * Invoked after each case's grading (deterministic + judge) is persisted,
+   * with the count done so far and the total. `judge:*` grading in
+   * particular is a real API call PER CASE, run sequentially here -- with
+   * no progress output this phase alone can look like the process died,
+   * separately from executeRun's own onProgress (see docs/DECISIONS.md).
+   */
+  onProgress?: (completed: number, total: number) => void;
 }): Promise<PersistRunResult> {
   const db = getDb();
   const casesByExternalId = new Map(params.cases.map((c) => [c.externalId, c]));
@@ -163,6 +171,9 @@ export async function persistRun(params: {
   const deterministicGraders = params.graders.filter((g) => !g.name.startsWith('judge:'));
   const judgeGraders = params.graders.filter((g) => g.name.startsWith('judge:'));
 
+  let gradedCount = 0;
+  const totalToGrade = params.executionResults.length;
+
   for (const result of params.executionResults) {
     const caseId = params.caseIdByExternalId.get(result.externalId);
     if (!caseId) {
@@ -186,11 +197,15 @@ export async function persistRun(params: {
     // A case that errored is excluded from grading entirely — never scored
     // as a zero (§5.1).
     if (result.error !== null || result.output === null) {
+      gradedCount += 1;
+      params.onProgress?.(gradedCount, totalToGrade);
       continue;
     }
 
     const caseData = casesByExternalId.get(result.externalId);
     if (!caseData) {
+      gradedCount += 1;
+      params.onProgress?.(gradedCount, totalToGrade);
       continue;
     }
 
@@ -247,6 +262,9 @@ export async function persistRun(params: {
         );
       }
     }
+
+    gradedCount += 1;
+    params.onProgress?.(gradedCount, totalToGrade);
   }
 
   const finishedAt = new Date();
