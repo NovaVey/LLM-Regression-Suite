@@ -25,6 +25,19 @@ import { pairCases, type CaseOutcome, type Exclusion } from './pairing.js';
 import { computeComparison, type ComparisonStats } from './statistics.js';
 
 /**
+ * Thrown when a `judge:*` grader has no passing calibration at all. Kept as
+ * a distinguishable subclass (not a plain `Error`) specifically so callers
+ * can tell this apart from a genuine infrastructure failure — §7's exit
+ * code table treats "uncalibrated judge" as warn-level (exit 2, the same
+ * bucket as `insufficient_data`, "configurable to block"), not
+ * infrastructure failure (exit 3). A plain `catch (err) { exitCode = 3 }`
+ * in the CLI would conflate "the DB is unreachable" with "you haven't
+ * calibrated your judge yet" — two very different situations for a team to
+ * be told about the same way. See docs/DECISIONS.md.
+ */
+export class UncalibratedJudgeError extends Error {}
+
+/**
  * Returns the weighted average of `graderScores`, or `null` if there is
  * nothing usable to average (either no grades at all, or every grade that
  * exists belongs to a grader weighted to 0 — see `resolveJudgeGraderWeights`).
@@ -83,7 +96,7 @@ async function checkJudgeCalibrationGates(
     const gate = checkCalibrationGate(calibrations, judgeModel, judgePromptHash);
 
     if (gate.status === 'missing') {
-      throw new Error(
+      throw new UncalibratedJudgeError(
         `Judge \`${rubric.name}\` has no passing calibration. Run \`llmreg calibrate --grader ${g.name}\`.`,
       );
     }

@@ -7,6 +7,7 @@ import {
   getJudgeModel,
   getTargetModel,
   runMigrations,
+  UncalibratedJudgeError,
 } from '@llmreg/core';
 import { runCalibrateCommand } from './commands/calibrate.js';
 import { runCompareCommand } from './commands/compare.js';
@@ -183,7 +184,10 @@ program
       }
     } catch (err) {
       console.error(err instanceof Error ? err.message : String(err));
-      process.exitCode = 3;
+      // Per §7's exit code table, an uncalibrated judge is warn-level (2,
+      // the same bucket as insufficient_data, "configurable to block") --
+      // not an infrastructure failure (3). Anything else genuinely is.
+      process.exitCode = err instanceof UncalibratedJudgeError ? 2 : 3;
     }
   });
 

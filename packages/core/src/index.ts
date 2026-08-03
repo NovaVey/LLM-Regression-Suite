@@ -37,7 +37,7 @@ export { pairCases } from './comparison/pairing.js';
 export type { CaseOutcome, Exclusion, ExclusionReason, PairedCase, PairingResult } from './comparison/pairing.js';
 export { computeComparison } from './comparison/statistics.js';
 export type { ComparisonStats, RegressionComparisonInput } from './comparison/statistics.js';
-export { compareRuns } from './comparison/compare.js';
+export { compareRuns, UncalibratedJudgeError } from './comparison/compare.js';
 export type { CompareRunsParams, CompareRunsResult } from './comparison/compare.js';
 export { buildJudgeSystemPrompt, buildJudgeUserMessage, rubricFromGraderConfig } from './judge/prompt.js';
 export type { JudgeRubric } from './judge/prompt.js';
