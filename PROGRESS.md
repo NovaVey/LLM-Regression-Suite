@@ -230,3 +230,69 @@ All 108 tests pass (`npx vitest run`); full `tsc -b` build is clean. Verificatio
 ## Phase 5 — CHECKPOINT
 
 Per §9: "show me the kappa, the confusion matrix, and what happens when I try to compare with a stale calibration." Shown above, all against a real database via the real CLI, using disclosed synthetic data. Stopping here per rule 2 — this is a CHECKPOINT phase, not delegated, and needs the user's own real labels before calibration means anything beyond a pipeline smoke test. See the chat message for the full report and the open ask (100–300 real human labels).
+
+## Phase 6 — Simulations
+
+**Owner:** `statistician` for all six simulation modules, concurrently with `test-author` (the §10 Simulations bucket, from spec and the interface contract alone — without reading the implementation) — a background Workflow, per §14 ("Phase 6 simulations" is explicitly statistician's). Main agent designed the full interface contract up front (handed identically to both agents), then integrated, fixed a finding both agents independently surfaced, built the `llmreg simulate` CLI, and verified.
+
+**Files:**
+
+- `packages/core/src/simulations/generator.ts` — `generateSyntheticPairedCases()`. Shared generative model: per-case latent difficulty `p_i` shared between baseline/candidate draws (a uniform wobble around `basePassRate`, not a Beta distribution — deliberate simplification, see `docs/DECISIONS.md`), `effectSize` shifts the candidate's true pass probability, `critical: false` unconditionally.
+- `packages/core/src/simulations/null-model.ts` — `runNullModelSimulation()`, §6.1. **Modified during integration** — see "The finding" below.
+- `packages/core/src/simulations/power-curve.ts` — `runPowerCurveSimulation()` + `interpolateDetectionThreshold()`, §6.2.
+- `packages/core/src/simulations/mde-validation.ts` — `runMdeValidation()`, §6.3, built on power-curve.ts.
+- `packages/core/src/simulations/pairing-benefit.ts` — `runPairingBenefitSimulation()`, §6.5, with a self-contained (not exported to `stats/`) unpaired bootstrap for the comparison only.
+- `packages/core/src/simulations/judge-drift.ts` — `runJudgeDriftSimulation()`, §6.4, a synthetic judge stand-in (no real judge model callable in this environment). No CLI verb — deliberate scope decision (see `docs/DECISIONS.md`).
+- `packages/core/src/stats/bootstrap.ts`, `packages/core/src/comparison/statistics.ts` (main agent, small additive change) — `bootstrapCI`/`computeComparison` gained an optional, backward-compatible `rand` parameter so Phase 6 can make a real "same seed, same result" claim while still calling the REAL production comparison code. Every existing call site is unaffected (see `docs/DECISIONS.md`).
+- `packages/cli/src/commands/simulate.ts` + `llmreg simulate null|power|mde` (main agent). Writes results to `simulations/results/*.json` at repo root (a future report UI reads these, per §9's exit criteria — output artifacts, not package source).
+- `packages/core/test/simulations/*.test.ts` (test-author) — 55 tests across all six files: generator validation/determinism/covariance, null-model tolerance-band arithmetic (rewritten during integration, see below), power-curve monotonicity + interpolation, MDE-validation, pairing-benefit, judge-drift directional checks.
+- `docs/STATISTICS.md` — new §8 (all five validations, the generator model, the null-model finding, determinism). `docs/DECISIONS.md` — the null-model open question (full writeup), the `bootstrapCI` `rand` parameter, the unpaired-bootstrap-stays-local decision, the uniform-wobble-not-Beta decision, the judge-drift-has-no-CLI-verb decision.
+
+**The finding, and what changed because of it.** Both `statistician` and `test-author` independently discovered the same thing, before either read the other's conclusion: `determineVerdict` (§5.6) makes `regression` a ONE-SIDED event (`ciUpper < 0`) out of a TWO-SIDED `(1−α)` CI. Under §6.1's true-null setup, that one-sided rate mathematically converges to `α/2`, not `α` — confirmed independently by both agents across many parameter combinations, and a third time by the main agent in a real, deterministic 2,000-trial CLI run. §6.1's/§12's "must land near 5%" language is quantitatively consistent with the **combined** `regression + improvement_detected` rate (which does converge to `α`), not the one-sided `regression`-only rate §6.1 literally says to count.
+
+This is a real, open product question — not a bug — and neither of the two "fixes" (redefine the CI construction to make the one-sided rate hit `α` directly, which touches already-shipped Phase 1/4 code and the `ciLower`/`ciUpper` values already stored and reported; or simply retarget the spec's own outward-facing "~5%" language to `α/2`) was applied unilaterally. `runNullModelSimulation` was rewritten to report **both** rates, each checked against its own mathematically correct target, and `null-model.test.ts` was rewritten to match (no more expected-red tests — every test now asserts something that is actually true of a correctly-functioning system). Full reasoning in `docs/DECISIONS.md`; raised to the user at the checkpoint below.
+
+**A second integration fix:** the original implementation's four functions that call the real `computeComparison` (`null-model.ts`, `power-curve.ts`, `mde-validation.ts` via power-curve, `pairing-benefit.ts`'s paired path) inherited non-determinism from `bootstrapCI`'s unseeded global `Math.random()` — both agents flagged this independently rather than silently working around it (the statistician's own scratch verification resorted to monkey-patching `Math.random`, correctly flagged as not shippable). Fixed at the root: `bootstrapCI`/`computeComparison` gained an optional `rand` parameter (default `Math.random`, zero effect on any existing caller), and all four Phase 6 files now pass an explicit seeded `mulberry32` stream. Verified end-to-end: `llmreg simulate null --seed 999 --trials 500` run twice produces byte-identical output.
+
+**Exit criteria — verified with real numbers, `llmreg simulate` CLI, deterministic:**
+
+```
+$ node packages/cli/dist/index.js simulate null
+Null model: 2000 trials, alpha=0.05
+  regression rate (one-sided, blocks a PR):     2.35%  target ~2.50% (alpha/2)  within tolerance
+  improvement rate (one-sided, symmetric tail): 2.65%
+  combined rate (CI excluded zero at all):      5.00%  target ~5.00% (alpha)   within tolerance
+```
+— "null model false positive rate within tolerance of alpha" ✓ (both readings, each against its own correct target — see the finding above for why there are two).
+
+```
+$ node packages/cli/dist/index.js simulate power
+n\effect  1pt  2pt  5pt  10pt  20pt
+n=20       3%   3%   7%   9%   29%
+n=50       5%   5%  11%  19%   53%
+n=100      5%   5%  13%  27%   85%
+n=250      1%   6%  25%  62%  100%
+n=500      7%   8%  44%  89%  100%
+
+Pairing benefit (§6.5), n=100, injected effect=8pt:
+  paired detection rate:   21.3%
+  unpaired detection rate: 14.3%
+```
+— "power curve grid generated" ✓; detection rate rises with both effect size and n (some cell-level noise at 150 trials/cell, expected at this trial count). "paired-vs-unpaired chart produced" ✓ — paired detects meaningfully more often than unpaired at the identical n, per §6.5.
+
+```
+$ node packages/cli/dist/index.js simulate mde
+  n=50: reported=24.0pt  empirical=27.0pt  within tolerance
+  n=100: reported=18.2pt  empirical=18.2pt  within tolerance
+  n=250: reported=11.6pt  empirical=12.5pt  within tolerance
+  all within tolerance: true
+```
+— "reported MDE matches ~80% detection on the curve" ✓ at every sample size tried.
+
+**Judge drift (§6.4, library-only, no CLI):** accuracy 0.9→0.65 (worse rubric) moved kappa `0.762 → 0.268`; accuracy 0.6→0.95 (better rubric) moved kappa `0.178 → 0.911`; a coin-flip judge (accuracy 0.5) landed at kappa ≈ 0; a perfect judge (accuracy 1.0) landed at kappa exactly 1 both before and after. Demonstrates §6.4's point: calibration is a live constraint, not a one-time formality.
+
+**Full build + test:** `npm run build` (clean) and `npx vitest run` → **158/158 passed**, confirmed stable across 3 repeated runs (no flakiness from the determinism fix).
+
+## Phase 6 — CHECKPOINT
+
+Per §9: "this is the credibility of the whole repo. Walk me through the null model result before we go further." Walked through above — including the one-sided-vs-two-sided finding, which is exactly the kind of thing this checkpoint exists to catch before it becomes a headline claim nobody double-checked. Stopping here per rule 2. See the chat message for the full report and the open question needing the user's call.

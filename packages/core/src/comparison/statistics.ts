@@ -100,6 +100,8 @@ export interface RegressionComparisonInput {
   bootstrapIterations: number;
   /** Defaults to 0.8 — see DEFAULT_POWER above. */
   power?: number;
+  /** Forwarded to `bootstrapCI` — defaults to `Math.random` there. Only Phase 6's simulations pass this, for reproducible seeded runs; production call sites never set it. */
+  rand?: () => number;
 }
 
 export interface ComparisonStats {
@@ -192,7 +194,10 @@ export function computeComparison(input: RegressionComparisonInput): ComparisonS
   }
 
   const differences = paired.map((c) => c.difference);
-  const bootstrap = bootstrapCI(differences, bootstrapIterations, alpha);
+  const bootstrap =
+    input.rand !== undefined
+      ? bootstrapCI(differences, bootstrapIterations, alpha, input.rand)
+      : bootstrapCI(differences, bootstrapIterations, alpha);
   const differenceSD = sampleStandardDeviation(differences, bootstrap.mean);
   const mde = minimumDetectableEffect(differenceSD, pairedCaseCount, alpha, power);
 

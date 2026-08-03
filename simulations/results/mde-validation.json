@@ -1,0 +1,23 @@
+{
+  "cells": [
+    {
+      "sampleSize": 50,
+      "reportedMde": 0.2402692476836685,
+      "empiricalMde": 0.27,
+      "withinTolerance": true
+    },
+    {
+      "sampleSize": 100,
+      "reportedMde": 0.18239124165625725,
+      "empiricalMde": 0.18230769230769234,
+      "withinTolerance": true
+    },
+    {
+      "sampleSize": 250,
+      "reportedMde": 0.11559906269690211,
+      "empiricalMde": 0.12523809523809526,
+      "withinTolerance": true
+    }
+  ],
+  "allWithinTolerance": true
+}

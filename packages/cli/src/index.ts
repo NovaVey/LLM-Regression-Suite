@@ -12,6 +12,7 @@ import { runCalibrateCommand } from './commands/calibrate.js';
 import { runCompareCommand } from './commands/compare.js';
 import { runInit } from './commands/init.js';
 import { runRunCommand } from './commands/run.js';
+import { runSimulateNull, runSimulatePower, runSimulateMde, writeSimulationResult } from './commands/simulate.js';
 
 function readEnv(fn: () => string): string | undefined {
   try {
@@ -224,6 +225,97 @@ program
       }
     } catch (err) {
       console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 3;
+    }
+  });
+
+const simulate = program.command('simulate').description('Run the Phase 6 validations (§6) against synthetic data with a known ground truth.');
+
+simulate
+  .command('null')
+  .description("Null model (§6.1): two IDENTICAL variants, repeated trials -- how often does the tool falsely claim a regression?")
+  .option('--trials <n>', 'number of trials', Number)
+  .option('--seed <n>', 'PRNG seed, for a reproducible run', Number)
+  .action((opts) => {
+    const result = runSimulateNull({
+      ...(opts.trials !== undefined ? { trials: opts.trials } : {}),
+      ...(opts.seed !== undefined ? { seed: opts.seed } : {}),
+    });
+    const path = writeSimulationResult('null-model', result);
+
+    console.log(`Null model: ${result.trials} trials, alpha=${result.alpha}`);
+    console.log(
+      `  regression rate (one-sided, blocks a PR):     ${(result.regressionRate * 100).toFixed(2)}%  target ~${(result.regressionRateTarget * 100).toFixed(2)}% (alpha/2)  ${result.regressionRateWithinTolerance ? 'within tolerance' : 'OUTSIDE tolerance'}`,
+    );
+    console.log(
+      `  improvement rate (one-sided, symmetric tail): ${(result.improvementRate * 100).toFixed(2)}%`,
+    );
+    console.log(
+      `  combined rate (CI excluded zero at all):      ${(result.combinedRate * 100).toFixed(2)}%  target ~${(result.alpha * 100).toFixed(2)}% (alpha)   ${result.combinedRateWithinTolerance ? 'within tolerance' : 'OUTSIDE tolerance'}`,
+    );
+    console.log(
+      `\n  §6.1/§12's "must land near ${(result.alpha * 100).toFixed(0)}%" language matches the COMBINED rate above, not the one-sided regression rate -- see docs/DECISIONS.md.`,
+    );
+    console.log(`  Full result: ${path}`);
+
+    if (!result.regressionRateWithinTolerance && !result.combinedRateWithinTolerance) {
+      process.exitCode = 3; // neither reading is calibrated -- something is actually broken
+    }
+  });
+
+simulate
+  .command('power')
+  .description('Power curve (§6.2) + pairing benefit (§6.5): injected regressions across effect sizes and dataset sizes.')
+  .option('--trials-per-cell <n>', 'trials per grid cell', Number)
+  .option('--seed <n>', 'PRNG seed, for a reproducible run', Number)
+  .action((opts) => {
+    const outcome = runSimulatePower({
+      ...(opts.trialsPerCell !== undefined ? { trialsPerCell: opts.trialsPerCell } : {}),
+      ...(opts.seed !== undefined ? { seed: opts.seed } : {}),
+    });
+    const path = writeSimulationResult('power-curve', outcome);
+
+    console.log('Power curve (detection rate by effect size x sample size):\n');
+    const sampleSizes = [...new Set(outcome.powerCurve.cells.map((c) => c.sampleSize))];
+    const effectSizes = [...new Set(outcome.powerCurve.cells.map((c) => c.effectSize))];
+    const header = ['n\\effect', ...effectSizes.map((e) => `${(e * 100).toFixed(0)}pt`)].join('\t');
+    console.log(header);
+    for (const n of sampleSizes) {
+      const row = outcome.powerCurve.cells.filter((c) => c.sampleSize === n);
+      const cells = effectSizes.map((e) => {
+        const cell = row.find((c) => c.effectSize === e);
+        return cell ? `${(cell.detectionRate * 100).toFixed(0)}%` : '-';
+      });
+      console.log([`n=${n}`, ...cells].join('\t'));
+    }
+
+    console.log(`\nPairing benefit (§6.5), n=${outcome.pairingBenefit.n}, injected effect=${(outcome.pairingBenefit.effectSize * 100).toFixed(0)}pt:`);
+    console.log(`  paired detection rate:   ${(outcome.pairingBenefit.pairedDetectionRate * 100).toFixed(1)}%`);
+    console.log(`  unpaired detection rate: ${(outcome.pairingBenefit.unpairedDetectionRate * 100).toFixed(1)}%`);
+    console.log(`\n  Full result: ${path}`);
+  });
+
+simulate
+  .command('mde')
+  .description('MDE validation (§6.3): does the reported minimum detectable effect match what the power curve actually detects at ~80%?')
+  .option('--seed <n>', 'PRNG seed, for a reproducible run', Number)
+  .action((opts) => {
+    const result = runSimulateMde({
+      ...(opts.seed !== undefined ? { seed: opts.seed } : {}),
+    });
+    const path = writeSimulationResult('mde-validation', result);
+
+    console.log('MDE validation (reported vs. empirical, per sample size):\n');
+    for (const cell of result.cells) {
+      const empirical = cell.empiricalMde !== null ? `${(cell.empiricalMde * 100).toFixed(1)}pt` : 'n/a (sweep did not bracket)';
+      console.log(
+        `  n=${cell.sampleSize}: reported=${(cell.reportedMde * 100).toFixed(1)}pt  empirical=${empirical}  ${cell.withinTolerance ? 'within tolerance' : 'OUTSIDE tolerance'}`,
+      );
+    }
+    console.log(`\n  all within tolerance: ${result.allWithinTolerance}`);
+    console.log(`  Full result: ${path}`);
+
+    if (!result.allWithinTolerance) {
       process.exitCode = 3;
     }
   });

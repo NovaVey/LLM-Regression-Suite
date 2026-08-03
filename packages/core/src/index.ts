@@ -63,3 +63,15 @@ export {
   saveCalibration,
 } from './judge/persist.js';
 export type { SampledOutput } from './judge/persist.js';
+export { generateSyntheticPairedCases } from './simulations/generator.js';
+export type { CaseGeneratorParams } from './simulations/generator.js';
+export { runNullModelSimulation } from './simulations/null-model.js';
+export type { NullModelParams, NullModelResult } from './simulations/null-model.js';
+export { interpolateDetectionThreshold, runPowerCurveSimulation } from './simulations/power-curve.js';
+export type { PowerCurveCell, PowerCurveParams, PowerCurveResult } from './simulations/power-curve.js';
+export { runMdeValidation } from './simulations/mde-validation.js';
+export type { MdeValidationCell, MdeValidationParams, MdeValidationResult } from './simulations/mde-validation.js';
+export { runPairingBenefitSimulation } from './simulations/pairing-benefit.js';
+export type { PairingBenefitParams, PairingBenefitResult } from './simulations/pairing-benefit.js';
+export { runJudgeDriftSimulation } from './simulations/judge-drift.js';
+export type { JudgeDriftParams, JudgeDriftResult } from './simulations/judge-drift.js';

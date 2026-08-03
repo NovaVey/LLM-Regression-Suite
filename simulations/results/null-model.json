@@ -1,0 +1,14 @@
+{
+  "trials": 2000,
+  "alpha": 0.05,
+  "regressionCount": 47,
+  "regressionRate": 0.0235,
+  "regressionRateTarget": 0.025,
+  "regressionRateStandardError": 0.0034910600109422352,
+  "regressionRateWithinTolerance": true,
+  "improvementCount": 53,
+  "improvementRate": 0.0265,
+  "combinedRate": 0.05,
+  "combinedRateStandardError": 0.004873397172404482,
+  "combinedRateWithinTolerance": true
+}

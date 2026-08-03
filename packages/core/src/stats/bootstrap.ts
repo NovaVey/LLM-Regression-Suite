@@ -28,6 +28,15 @@
  * 4. Resampling is with replacement, at the case level, one draw per
  *    original case per iteration (the standard nonparametric bootstrap) —
  *    each bootstrap sample has the same size n as the input.
+ *
+ * `rand` (optional, defaults to `Math.random`): the source of uniform [0,1)
+ * draws used for resampling. Added for Phase 6 (`packages/core/src/
+ * simulations/*.ts`), which needs a REAL comparison run through a seeded,
+ * reproducible RNG to make its own "same seed, same result" claims
+ * deliverable — every production call site (`compare.ts` via
+ * `computeComparison`) omits this argument and gets the exact same
+ * `Math.random()`-driven behavior as before; this parameter changes nothing
+ * for anything already shipped.
  */
 
 export interface BootstrapResult {
@@ -75,6 +84,7 @@ export function bootstrapCI(
   differences: number[],
   iterations: number,
   alpha: number,
+  rand: () => number = Math.random,
 ): BootstrapResult {
   const n = differences.length;
   if (n === 0) {
@@ -98,7 +108,7 @@ export function bootstrapCI(
     let resampledSum = 0;
     for (let j = 0; j < n; j++) {
       // Draw one case index uniformly at random, with replacement.
-      const idx = Math.floor(Math.random() * n);
+      const idx = Math.floor(rand() * n);
       resampledSum += differences[idx] as number;
     }
     bootstrapMeans[i] = resampledSum / n;
