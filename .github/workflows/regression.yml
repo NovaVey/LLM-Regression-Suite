@@ -1,0 +1,43 @@
+name: LLM Regression Suite
+
+# Dogfoods the repo's own composite action (action/action.yml) against its
+# own example suite -- §11's Definition of Done: "Working GitHub Action
+# producing a real PR comment in this repo."
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history, not the default shallow clone -- `baseline` is a
+          # sha that can be arbitrarily far back, and action/src/main.mjs's
+          # `git show <baseline>:<path>` needs it reachable. (main.mjs also
+          # has its own defensive `git fetch --depth=1 <sha>` fallback in
+          # case a caller omits this, but a full checkout avoids relying on
+          # that path in the common case.)
+          fetch-depth: 0
+
+      - uses: ./action
+        with:
+          suite: examples/support-agent
+          baseline: ${{ github.event.pull_request.base.sha }}
+          candidate: ${{ github.sha }}
+          fail-on: regression
+          # Demo/cost-bounded run, not the full 240-case suite -- see
+          # action.yml's `limit` input. A real team's own workflow would
+          # normally omit this.
+          limit: 20
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TARGET_MODEL: claude-sonnet-5
+          JUDGE_MODEL: claude-opus-5

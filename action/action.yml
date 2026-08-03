@@ -1,0 +1,79 @@
+name: 'LLM Regression Suite'
+description: >-
+  Paired evaluation with statistical significance for LLM prompt/model
+  changes. Detects regressions in CI with a reported false-positive rate;
+  never certifies a change as good (see docs/STATISTICS.md). Skips
+  entirely when the PR does not touch the suite's files.
+author: 'NovaVey'
+branding:
+  icon: 'activity'
+  color: 'gray-dark'
+
+inputs:
+  suite:
+    description: >-
+      Path to the suite directory (must contain suite.json, dataset.json,
+      and system-prompt.txt).
+    required: true
+  baseline:
+    description: 'Baseline git ref/sha to compare from (e.g. the PR base sha).'
+    required: true
+  candidate:
+    description: 'Candidate git ref/sha to compare to (e.g. the PR head sha).'
+    required: true
+  fail-on:
+    description: >-
+      Comma-separated outcomes that fail the check: regression,
+      insufficient_data, uncalibrated-judge, infrastructure-failure.
+      Default is regression only, per §5.6 -- every other outcome warns in
+      the PR comment without blocking the check. Widen this if your team
+      wants insufficient_data or an uncalibrated judge to also block.
+    required: false
+    default: 'regression'
+  limit:
+    description: >-
+      Only run the first N cases from the dataset. Omit to run the full
+      suite; useful for a faster/cheaper demo or smoke-test run.
+    required: false
+  github-token:
+    description: 'Token used to find/create/update the PR comment.'
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Install dependencies and build
+      shell: bash
+      working-directory: ${{ github.action_path }}/..
+      run: |
+        npm ci
+        npm run build
+      # Builds from THIS checkout's own source rather than a pre-bundled
+      # dist/ shipped with the action -- see docs/DECISIONS.md for why
+      # (in short: this repo's first consumer is itself, via
+      # .github/workflows/regression.yml, so the action always exercises
+      # whatever's actually in the PR, including changes to the action's
+      # own dependencies).
+
+    - name: Apply database migrations
+      shell: bash
+      working-directory: ${{ github.action_path }}/..
+      run: node packages/cli/dist/index.js migrate
+
+    - name: Run comparison
+      shell: bash
+      working-directory: ${{ github.action_path }}/..
+      run: node action/src/main.mjs
+      env:
+        INPUT_SUITE: ${{ inputs.suite }}
+        INPUT_BASELINE: ${{ inputs.baseline }}
+        INPUT_CANDIDATE: ${{ inputs.candidate }}
+        INPUT_FAIL_ON: ${{ inputs.fail-on }}
+        INPUT_LIMIT: ${{ inputs.limit }}
+        INPUT_GITHUB_TOKEN: ${{ inputs.github-token }}
