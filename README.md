@@ -41,6 +41,8 @@ n=500       7%    8%   44%   89%  100%
 
 Reported minimum detectable effect (MDE) at ~80% power was checked against where this grid actually crosses 80% and agreed within a few points at every sample size tried (§8.4 of the statistics doc). And pairing isn't complexity for its own sake: on the same synthetic 8-point regression at n=100, the paired analysis this tool actually uses detected it 21.3% of the time; discarding the pairing and comparing two averages instead — the naive approach — detected it only 14.3% of the time, at the identical sample size.
 
+![Paired detects the regression more often than unpaired, at the same sample size](simulations/results/pairing-benefit-chart.svg)
+
 ## How the statistics work, briefly
 
 - **Paired bootstrap confidence interval** on the per-case difference, not a comparison of two averages — cancels out case-to-case difficulty variance that would otherwise swamp a real effect.

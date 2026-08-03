@@ -293,6 +293,11 @@ $ node packages/cli/dist/index.js simulate mde
 
 **Full build + test:** `npm run build` (clean) and `npx vitest run` → **158/158 passed**, confirmed stable across 3 repeated runs (no flakiness from the determinism fix).
 
+**Post-checkpoint audit, prompted by "anything left in phase 6":** re-read §9's exit criteria and §11's Definition of Done literally against what was actually shipped, rather than assuming the checkpoint conversation covered everything.
+
+- Verified "`llmreg simulate null` runnable by a stranger in under 10 minutes from clone" (§11) for real: `env -i PATH="$PATH" HOME="$HOME" node packages/cli/dist/index.js simulate null` — a completely empty environment, no `.env`, no `DATABASE_URL`, no API key — ran clean. True as stated, not just assumed.
+- Found a real gap: §9's own Phase 6 exit line lists **"paired-vs-unpaired chart produced"** (§6.5: "One chart, and it justifies §5.1..."), and nothing chart-shaped had been built — only CLI text and JSON. Fixed: `renderPairingBenefitChart()` (`packages/cli/src/commands/simulate.ts`) generates a static SVG bar chart (categorical palette slots 1/2 per the dataviz skill's validated default — blue `#2a78d6`/orange `#eb6834`, CVD-safe adjacent pair), written to `simulations/results/pairing-benefit-chart.svg` by `llmreg simulate power` and embedded in the README's power-curve section. Rendered via headless Chromium and inspected visually (not just "the code looks right") — caught and fixed one real overflow bug this way: the first title ("Paired detects the injected regression more often (§6.5)") ran off the 480px canvas at 16px semibold, invisible in the raw SVG markup but obvious once actually rendered. Shortened to "Paired detects the regression more often," moved the §6.5 reference to the subtitle. Confirmed clean on re-render.
+
 ## Phase 6 — CHECKPOINT
 
 Per §9: "this is the credibility of the whole repo. Walk me through the null model result before we go further." Walked through above — including the one-sided-vs-two-sided finding, which is exactly the kind of thing this checkpoint exists to catch before it becomes a headline claim nobody double-checked. Stopping here per rule 2. See the chat message for the full report and the open question needing the user's call.

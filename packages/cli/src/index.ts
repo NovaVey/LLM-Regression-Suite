@@ -12,7 +12,14 @@ import { runCalibrateCommand } from './commands/calibrate.js';
 import { runCompareCommand } from './commands/compare.js';
 import { runInit } from './commands/init.js';
 import { runRunCommand } from './commands/run.js';
-import { runSimulateNull, runSimulatePower, runSimulateMde, writeSimulationResult } from './commands/simulate.js';
+import {
+  runSimulateNull,
+  runSimulatePower,
+  runSimulateMde,
+  writeSimulationResult,
+  renderPairingBenefitChart,
+  writeSimulationChart,
+} from './commands/simulate.js';
 
 function readEnv(fn: () => string): string | undefined {
   try {
@@ -292,6 +299,9 @@ simulate
     console.log(`\nPairing benefit (§6.5), n=${outcome.pairingBenefit.n}, injected effect=${(outcome.pairingBenefit.effectSize * 100).toFixed(0)}pt:`);
     console.log(`  paired detection rate:   ${(outcome.pairingBenefit.pairedDetectionRate * 100).toFixed(1)}%`);
     console.log(`  unpaired detection rate: ${(outcome.pairingBenefit.unpairedDetectionRate * 100).toFixed(1)}%`);
+
+    const chartPath = writeSimulationChart('pairing-benefit-chart', renderPairingBenefitChart(outcome.pairingBenefit));
+    console.log(`  Chart (§6.5's "one chart"): ${chartPath}`);
     console.log(`\n  Full result: ${path}`);
   });
 
