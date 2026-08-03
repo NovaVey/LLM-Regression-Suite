@@ -361,3 +361,15 @@ No CHECKPOINT for Phase 7 per §9. Proceeding to Phase 8 (GitHub Action) once gi
 ## Phase 8 — CHECKPOINT
 
 Per §9: "screenshot of the bot comment on a real PR. This is the demo." Everything is built, committed, and verified as thoroughly as this sandbox allows — but the actual screenshot needs a real PR running on real GitHub infrastructure with real repository secrets, which only the user can provide. Stopping here per rule 2.
+
+**Resolved — real demo PR (#4), real bot comment, real infrastructure.** Opened a demo PR editing `examples/support-agent/system-prompt.txt`; the workflow ran on GitHub's own runners against the user's real Railway Postgres and Anthropic account. Three real, previously-unverifiable bugs surfaced and were each fixed via their own PR merged to `main`:
+
+1. `DATABASE_URL` was set to Railway's *internal* network hostname (`*.railway.internal`), unreachable from GitHub's public runners — `getaddrinfo ENOTFOUND`. Local mock-server verification couldn't catch this; it's a property of the real secret value, not the code. Fixed by the user updating the secret to Railway's public/proxy connection string.
+2. `action/src/main.mjs` logged only `errorCount`, not the per-case error messages already returned by `runRunCommand` — a systemic failure (here, an exhausted Anthropic billing balance) was indistinguishable from unrelated per-case failures without a database query, violating the spirit of §5.9's "fail loudly." Fixed by adding `logSampleErrors()`, printing up to 3 distinct error messages per run (PR #5).
+3. `.github/workflows/regression.yml`'s demo `limit: 20` was below `examples/support-agent/suite.json`'s own `thresholds.minPairedN: 30` — the demo could never produce a real verdict regardless of what changed. Fixed by raising the limit to 40 (PR #6).
+
+None of these three were reachable by the sandbox's mocked-infrastructure verification in the prior section — they're properties of real secrets, a real billing account, and a real config/threshold mismatch, exactly the class of gap §9's real-PR checkpoint exists to catch.
+
+Final result on PR #4, real API calls, real Postgres: `verdict=no_detectable_difference`, 40/40 paired cases, 0 excluded — a legitimate result given this demo suite only has the `latency` grader wired (content-quality grading needs a `judge:*` grader, not attached to this example suite) and the demo edit was a wording change unlikely to move latency. Screenshot of the real bot comment delivered to the user. PR #4 merged.
+
+**CHECKPOINT resolved.** Proceeding to Phase 9 only once the user gives the go-ahead.
