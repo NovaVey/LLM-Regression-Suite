@@ -51,6 +51,16 @@ export interface CalibrateCommandOutcome {
   judgeKappaFloor: number;
 }
 
+/**
+ * Deliberately never shows the judge's own score for a sample before (or
+ * during) the human's own labeling of it -- kappa measures agreement
+ * between two INDEPENDENT raters (§5.5), and a human who sees the judge's
+ * score before answering is anchored by it, artificially inflating
+ * agreement and reporting a calibration that looks better than the judge
+ * actually is. This was a real bug (not a hypothetical): an earlier version
+ * printed `(judge scored this output X)` right above the prompt, every
+ * time. See docs/DECISIONS.md.
+ */
 async function collectLabelsInteractively(samples: SampledOutput[], grader: string, labeledBy: string): Promise<void> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {
@@ -60,9 +70,6 @@ async function collectLabelsInteractively(samples: SampledOutput[], grader: stri
     for (const [i, sample] of samples.entries()) {
       console.log(`\n--- [${i + 1}/${samples.length}] ${sample.externalId} (tags: ${sample.tags.join(', ') || 'none'}) ---`);
       console.log(sample.output);
-      if (sample.judgeScore !== null) {
-        console.log(`(judge scored this output ${sample.judgeScore})`);
-      }
       const answer = (await rl.question('Your score: ')).trim();
       if (answer === '' || answer.toLowerCase() === 'skip') {
         continue;
