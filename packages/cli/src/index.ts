@@ -9,6 +9,10 @@ import {
   runMigrations,
   UncalibratedJudgeError,
 } from '@llmreg/core';
+import { loadDotEnv } from './env.js';
+
+loadDotEnv();
+
 import { runCalibrateCommand } from './commands/calibrate.js';
 import { runCompareCommand } from './commands/compare.js';
 import { runInit } from './commands/init.js';
