@@ -45,6 +45,21 @@ function git(args) {
   return execFileSync('git', args, { encoding: 'utf8' }).trim();
 }
 
+/**
+ * `RunCommandOutcome.errorCount` alone can't be diagnosed from the Actions
+ * log -- a systemic failure (bad model id, bad API key, network egress
+ * block) shows up as "N cases, N errors" with no way to tell that apart
+ * from N unrelated per-case failures without a database query. Print a
+ * few distinct messages so the log itself is enough to diagnose (§5.9).
+ */
+function logSampleErrors(outcome) {
+  if (outcome.errorCount === 0) return;
+  const distinct = [...new Set(outcome.errors.map((e) => e.error))].slice(0, 3);
+  for (const message of distinct) {
+    console.log(`    error: ${message}`);
+  }
+}
+
 /** Shallow checkouts (the GitHub Actions default) may not have every commit an older PR base sha points at -- fetch it specifically rather than requiring every caller to set fetch-depth: 0. */
 function ensureShaAvailable(sha) {
   try {
@@ -190,12 +205,14 @@ async function main() {
     console.log(
       `  baseline run ${baselineOutcome.runId}: ${baselineOutcome.caseCount} cases, ${baselineOutcome.errorCount} errors, cache hit rate ${(baselineOutcome.cacheHitRate * 100).toFixed(1)}%`,
     );
+    logSampleErrors(baselineOutcome);
 
     console.log('Running candidate...');
     const candidateOutcome = await runRunCommand({ ...runOptions, label: candidateSha, systemPromptFile: promptPath });
     console.log(
       `  candidate run ${candidateOutcome.runId}: ${candidateOutcome.caseCount} cases, ${candidateOutcome.errorCount} errors, cache hit rate ${(candidateOutcome.cacheHitRate * 100).toFixed(1)}%`,
     );
+    logSampleErrors(candidateOutcome);
 
     const comparisonOutcome = await runCompareCommand({
       suite: suitePath,
