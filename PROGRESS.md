@@ -331,3 +331,33 @@ Per §9: "this is the credibility of the whole repo. Walk me through the null mo
 **Full build + test:** `npm run build` (clean) and `npx vitest run` → **214/214 passed**.
 
 No CHECKPOINT for Phase 7 per §9. Proceeding to Phase 8 (GitHub Action) once given the go-ahead.
+
+## Phase 8 — GitHub Action
+
+**Owner:** main agent — not delegated. §14: "the main agent owns... the CI action."
+
+**Files:**
+
+- `action/action.yml` — composite action. Inputs: `suite`, `baseline`, `candidate`, `fail-on` (default `regression`), `limit` (optional, for a cheaper demo/smoke run), `github-token` (default `${{ github.token }}`). Three steps: set up Node, `npm ci && npm run build` (from the checkout's own source — see `docs/DECISIONS.md`), `llmreg migrate`, then `action/src/main.mjs`.
+- `action/src/main.mjs` — the orchestration script. Dependency-free (no `@actions/core`/`@actions/github`/octokit — see `docs/DECISIONS.md`): reads `INPUT_*` env vars, imports `runRunCommand`/`runCompareCommand`/`runReportCommand` directly from the built CLI command modules via relative paths, calls the GitHub REST API with Node 20's built-in `fetch`. Path-filters on whether the diff between `baseline`/`candidate` touches anything under `suite` (§9 exit criteria: a README-only PR runs nothing); extracts the baseline system prompt via `git show <baseline>:<suite>/system-prompt.txt` (with a `git fetch --depth=1` fallback for shallow checkouts); runs baseline + candidate; compares; renders the markdown report; finds an existing PR comment by `PR_COMMENT_MARKER` and updates it in place, or creates one.
+- `.github/workflows/regression.yml` — dogfoods the action against this repo's own PRs (§11: "Working GitHub Action producing a real PR comment in this repo"), `fetch-depth: 0`, `limit: 20` for a bounded demo run.
+- `examples/support-agent/system-prompt.txt` — a minimal, real, single system prompt, added now because Phase 8's exit criteria needs *a* prompt file with git history to demo against; the fuller "two deliberately mixed variants" stays Phase 10's own work (see `docs/DECISIONS.md`).
+- `docs/DECISIONS.md` — five new entries: dependency-free by choice, build-from-source vs. a pre-bundled `dist/`, the graceful-failure fix below, `fail-on`'s six-outcome design, and the minimal system-prompt addition.
+
+**A real gap found and fixed during local verification, not filed against a hypothetical.** The first version only wrapped `compareRuns()` in a try/catch for the graceful-failure-comment path; extracting the baseline prompt (`git show`) sat outside it. Tested a PR that introduces `examples/support-agent` for the first time (nothing to extract at the baseline sha) — the script crashed with a raw `git` stderr dump, no PR comment posted at all, exactly the silent-failure shape §5.9 says never to produce ("the check fails loudly, never silently"). Fixed by widening the try/catch around the whole baseline→candidate→compare→report sequence, with a specific, friendly message for this case and a generic "infrastructure failure" fallback for anything else. Re-verified after the fix: same scenario now posts a clear explanatory comment and exits 0 (this specific case isn't in `fail-on` by default).
+
+**Exit criteria — verified locally against real local Postgres, real git history, and mocked Anthropic + GitHub APIs** (this sandbox has no real Anthropic API access or real GitHub Actions runner, same constraint as every prior phase's local verification; a small Node mock server stood in for both `POST /v1/messages` and the GitHub issue-comments REST endpoints, using two real, local commits' worth of git history for the baseline/candidate prompt split — not fabricated data, just a stand-in for the two things this sandbox genuinely cannot reach):
+
+1. **"A PR that edits the example prompt produces a real comment":** ✓. Two real local commits (system-prompt.txt edited between them), real `git show` extraction confirmed correct (the mock Anthropic server logged `signsOff=false` for every baseline call and `signsOff=true` for every candidate call — the exact wording difference between the two commits, proving the right prompt reached the right run), a real comparison computed (`verdict=insufficient_data` at n=5, correctly below the suite's `minPairedN=30`), a real comment created via the mock GitHub API.
+2. **In-place update, not a second comment (§5.8, §10's `the-pr-comment-updates-in-place-instead-of-posting-twice`):** ✓. Running the action a second time against the same fake PR: `GET comments: 1 existing` → `PATCH updated comment 1000` — never a second `POST`.
+3. **"A PR that edits the README produces no comparison run at all":** ✓. A baseline/candidate pair differing only outside `examples/support-agent` (this repo's own commit history) → `No changes under examples/support-agent... skipping, no comparison run.` No run, no compare, no comment, exit 0.
+4. **`fail-on` configurability:** ✓. Default `fail-on: regression` with an `insufficient_data` outcome → exit 0 (warns, doesn't block). Widened to `fail-on: regression,insufficient_data` on the identical scenario → exit 1, with the specific reason logged.
+5. **The brand-new-suite edge case above:** ✓, after the fix — explanatory comment posted, exit 0 (not in default `fail-on`).
+
+**What's still real, unverified work, and needs the user:** the actual GitHub Actions runner behavior (real `ANTHROPIC_API_KEY`/`DATABASE_URL` secrets, real network, real `pull_request` event) can only be exercised by a real PR on GitHub's own infrastructure — this is exactly what Phase 8's checkpoint asks to see. Needs `DATABASE_URL` and `ANTHROPIC_API_KEY` configured as repository secrets (Settings → Secrets and variables → Actions) before a real demo PR can produce a real comment.
+
+**Full build + test:** `npm run build` (clean) and `npx vitest run` → **214/214 passed** (no new unit tests this phase — the orchestration script's correctness was verified end-to-end against mocked infrastructure above, which exercises real behavior a mocked-import unit test wouldn't; §10's test plan doesn't name a Phase 8 unit-test bucket beyond the CI-exit-code tests already covered in Phase 4/5/7's own suites).
+
+## Phase 8 — CHECKPOINT
+
+Per §9: "screenshot of the bot comment on a real PR. This is the demo." Everything is built, committed, and verified as thoroughly as this sandbox allows — but the actual screenshot needs a real PR running on real GitHub infrastructure with real repository secrets, which only the user can provide. Stopping here per rule 2.

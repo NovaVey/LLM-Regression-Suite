@@ -147,11 +147,6 @@ async function main() {
   }
   console.log(`Changed files under ${suiteDir}:\n  ${changedFiles.join('\n  ')}`);
 
-  // --- Extract the baseline prompt from git history; candidate is the current checkout ---
-  const tmpDir = mkdtempSync(join(tmpdir(), 'llmreg-action-'));
-  const baselinePromptPath = join(tmpDir, 'baseline-system-prompt.txt');
-  writeFileSync(baselinePromptPath, git(['show', `${baselineSha}:${promptPath}`]), 'utf8');
-
   const runOptions = {
     suite: suitePath,
     dataset: datasetPath,
@@ -159,26 +154,49 @@ async function main() {
     ...(limit !== undefined ? { limit: Number(limit) } : {}),
   };
 
-  console.log('Running baseline...');
-  const baselineOutcome = await runRunCommand({ ...runOptions, label: baselineSha, systemPromptFile: baselinePromptPath });
-  console.log(
-    `  baseline run ${baselineOutcome.runId}: ${baselineOutcome.caseCount} cases, ${baselineOutcome.errorCount} errors, cache hit rate ${(baselineOutcome.cacheHitRate * 100).toFixed(1)}%`,
-  );
-
-  console.log('Running candidate...');
-  const candidateOutcome = await runRunCommand({ ...runOptions, label: candidateSha, systemPromptFile: promptPath });
-  console.log(
-    `  candidate run ${candidateOutcome.runId}: ${candidateOutcome.caseCount} cases, ${candidateOutcome.errorCount} errors, cache hit rate ${(candidateOutcome.cacheHitRate * 100).toFixed(1)}%`,
-  );
-
   // Tracks what should decide the job's exit code -- either a real verdict
   // string (regression|no_detectable_difference|improvement_detected|
-  // insufficient_data) or one of the two failure-to-even-compare states,
-  // both documented in action.yml's fail-on input.
+  // insufficient_data) or one of the failure-to-even-compare states, all
+  // documented in action.yml's fail-on input.
   let outcomeForExitCode;
   let commentBody;
 
+  // Wraps everything from baseline-prompt extraction through the compare
+  // and report calls: §5.9 says "the check fails loudly, never silently,"
+  // and that has to hold for every way this pipeline can fail, not just
+  // an uncalibrated judge -- a suite that's brand new at the baseline sha
+  // (git show fails: nothing to extract), a target API outage mid-run, or
+  // an uncalibrated judge should all end with a real, explanatory PR
+  // comment, never a bare red Actions log nobody reading the PR ever opens.
   try {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'llmreg-action-'));
+    const baselinePromptPath = join(tmpDir, 'baseline-system-prompt.txt');
+    let baselinePromptContent;
+    try {
+      baselinePromptContent = git(['show', `${baselineSha}:${promptPath}`]);
+    } catch (err) {
+      const stderr = err && typeof err === 'object' && 'stderr' in err ? String(err.stderr) : '';
+      if (stderr.includes('exists on disk, but not in') || stderr.includes('does not exist in')) {
+        throw new Error(
+          `\`${promptPath}\` doesn't exist yet at the baseline commit (${baselineSha.slice(0, 12)}) -- this looks like the suite is being introduced for the first time in this PR, so there's no prior version to compare against.`,
+        );
+      }
+      throw err;
+    }
+    writeFileSync(baselinePromptPath, baselinePromptContent, 'utf8');
+
+    console.log('Running baseline...');
+    const baselineOutcome = await runRunCommand({ ...runOptions, label: baselineSha, systemPromptFile: baselinePromptPath });
+    console.log(
+      `  baseline run ${baselineOutcome.runId}: ${baselineOutcome.caseCount} cases, ${baselineOutcome.errorCount} errors, cache hit rate ${(baselineOutcome.cacheHitRate * 100).toFixed(1)}%`,
+    );
+
+    console.log('Running candidate...');
+    const candidateOutcome = await runRunCommand({ ...runOptions, label: candidateSha, systemPromptFile: promptPath });
+    console.log(
+      `  candidate run ${candidateOutcome.runId}: ${candidateOutcome.caseCount} cases, ${candidateOutcome.errorCount} errors, cache hit rate ${(candidateOutcome.cacheHitRate * 100).toFixed(1)}%`,
+    );
+
     const comparisonOutcome = await runCompareCommand({
       suite: suitePath,
       baselineRun: baselineOutcome.runId,
@@ -189,10 +207,6 @@ async function main() {
     commentBody = rendered;
     console.log(`Comparison ${comparisonOutcome.comparisonId}: verdict=${comparisonOutcome.verdict}`);
   } catch (err) {
-    // §5.9: "the check fails loudly, never silently" -- an uncalibrated
-    // judge or a genuine infrastructure failure still gets a real PR
-    // comment explaining what happened, not just a red Actions log nobody
-    // reading the PR will ever open.
     const message = err instanceof Error ? err.message : String(err);
     if (err instanceof UncalibratedJudgeError) {
       outcomeForExitCode = 'uncalibrated-judge';
