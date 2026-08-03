@@ -34,8 +34,10 @@ jobs:
           fail-on: regression
           # Demo/cost-bounded run, not the full 240-case suite -- see
           # action.yml's `limit` input. A real team's own workflow would
-          # normally omit this.
-          limit: 20
+          # normally omit this. Must clear examples/support-agent/suite.json's
+          # thresholds.minPairedN (30) with margin, or every run reports
+          # insufficient_data regardless of the change under test.
+          limit: 40
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
