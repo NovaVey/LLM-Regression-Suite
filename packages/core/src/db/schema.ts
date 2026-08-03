@@ -190,6 +190,11 @@ export const comparisons = pgTable('comparisons', {
     .notNull()
     .default(sql`'{}'::uuid[]`),
   criticalRegressed: integer('critical_regressed').notNull().default(0),
+  // Added in migration 0001 (Phase 7): cases excluded from the statistic
+  // (errored on one side, or missing entirely) -- computed at compare time
+  // alongside pairedCaseCount/criticalRegressed, but not originally
+  // persisted; the report layer needs it alongside those two.
+  excludedCaseCount: integer('excluded_case_count').notNull().default(0),
   judgeCalibrationId: uuid('judge_calibration_id').references(() => judgeCalibrations.id),
   computedAt: timestamp('computed_at', { withTimezone: true }).notNull().defaultNow(),
 });

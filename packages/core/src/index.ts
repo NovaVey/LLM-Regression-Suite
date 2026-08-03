@@ -12,7 +12,7 @@ export {
 export type { TargetCallResult, TargetMessage } from './anthropic.js';
 export type { ReachabilityResult } from './types.js';
 export { DatasetValidationError, loadCases, loadSuiteConfig } from './dataset/load.js';
-export { stratifiedSample } from './dataset/split.js';
+export { mulberry32, stratifiedSample } from './dataset/split.js';
 export type { Case, CaseMessage, GraderConfig, SuiteConfig } from './dataset/schema.js';
 export { getGrader } from './graders/registry.js';
 export type { GraderContext, GradeResult, Grader } from './graders/types.js';
@@ -33,3 +33,59 @@ export type {
 } from './runner/execute.js';
 export { createVariant, ensureCases, ensureSuite, persistRun } from './runner/persist.js';
 export type { PersistRunResult, VariantInput } from './runner/persist.js';
+export { pairCases } from './comparison/pairing.js';
+export type { CaseOutcome, Exclusion, ExclusionReason, PairedCase, PairingResult } from './comparison/pairing.js';
+export { computeComparison } from './comparison/statistics.js';
+export type { ComparisonStats, RegressionComparisonInput } from './comparison/statistics.js';
+export { compareRuns, UncalibratedJudgeError, weightedScore } from './comparison/compare.js';
+export type { CompareRunsParams, CompareRunsResult } from './comparison/compare.js';
+export { loadComparisonReportData } from './report/load.js';
+export type {
+  ComparisonReportData,
+  FixedCaseRow,
+  JudgeCalibrationStatus,
+  MethodsInfo,
+  RegressedCaseRow,
+  Verdict,
+} from './report/types.js';
+export { computeTruncatedDiff, renderDiffBlock } from './report/diff.js';
+export type { DiffOp, DiffOpKind, TruncatedDiffOptions } from './report/diff.js';
+export { renderMarkdownReport, PR_COMMENT_MARKER } from './report/markdown.js';
+export { renderJsonReport } from './report/json.js';
+export { renderHtmlReport } from './report/html.js';
+export { buildJudgeSystemPrompt, buildJudgeUserMessage, rubricFromGraderConfig } from './judge/prompt.js';
+export type { JudgeRubric } from './judge/prompt.js';
+export { callJudge } from './judge/call.js';
+export type { JudgeCallResult } from './judge/call.js';
+export { cohensKappa } from './judge/kappa.js';
+export type { ConfusionMatrix, KappaResult } from './judge/kappa.js';
+export { checkCalibrationGate, computeBiasNote, matchLabelsToJudgeGrades } from './judge/calibration.js';
+export type {
+  CalibrationRecord,
+  GateStatus,
+  HumanLabelRecord,
+  JudgeGradeRecord,
+  MatchedLabel,
+} from './judge/calibration.js';
+export {
+  getCalibrationsForGrader,
+  getHumanLabelsForGrader,
+  getJudgeGradesForCalibration,
+  getRunOutputsForCalibration,
+  hashOutput,
+  recordHumanLabel,
+  saveCalibration,
+} from './judge/persist.js';
+export type { SampledOutput } from './judge/persist.js';
+export { generateSyntheticPairedCases } from './simulations/generator.js';
+export type { CaseGeneratorParams } from './simulations/generator.js';
+export { runNullModelSimulation } from './simulations/null-model.js';
+export type { NullModelParams, NullModelResult } from './simulations/null-model.js';
+export { interpolateDetectionThreshold, runPowerCurveSimulation } from './simulations/power-curve.js';
+export type { PowerCurveCell, PowerCurveParams, PowerCurveResult } from './simulations/power-curve.js';
+export { runMdeValidation } from './simulations/mde-validation.js';
+export type { MdeValidationCell, MdeValidationParams, MdeValidationResult } from './simulations/mde-validation.js';
+export { runPairingBenefitSimulation } from './simulations/pairing-benefit.js';
+export type { PairingBenefitParams, PairingBenefitResult } from './simulations/pairing-benefit.js';
+export { runJudgeDriftSimulation } from './simulations/judge-drift.js';
+export type { JudgeDriftParams, JudgeDriftResult } from './simulations/judge-drift.js';

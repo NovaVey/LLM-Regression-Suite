@@ -1,0 +1,188 @@
+{
+  "powerCurve": {
+    "cells": [
+      {
+        "effectSize": 0.01,
+        "sampleSize": 20,
+        "trials": 150,
+        "detections": 5,
+        "detectionRate": 0.03333333333333333
+      },
+      {
+        "effectSize": 0.01,
+        "sampleSize": 50,
+        "trials": 150,
+        "detections": 8,
+        "detectionRate": 0.05333333333333334
+      },
+      {
+        "effectSize": 0.01,
+        "sampleSize": 100,
+        "trials": 150,
+        "detections": 7,
+        "detectionRate": 0.04666666666666667
+      },
+      {
+        "effectSize": 0.01,
+        "sampleSize": 250,
+        "trials": 150,
+        "detections": 2,
+        "detectionRate": 0.013333333333333334
+      },
+      {
+        "effectSize": 0.01,
+        "sampleSize": 500,
+        "trials": 150,
+        "detections": 10,
+        "detectionRate": 0.06666666666666667
+      },
+      {
+        "effectSize": 0.02,
+        "sampleSize": 20,
+        "trials": 150,
+        "detections": 4,
+        "detectionRate": 0.02666666666666667
+      },
+      {
+        "effectSize": 0.02,
+        "sampleSize": 50,
+        "trials": 150,
+        "detections": 8,
+        "detectionRate": 0.05333333333333334
+      },
+      {
+        "effectSize": 0.02,
+        "sampleSize": 100,
+        "trials": 150,
+        "detections": 7,
+        "detectionRate": 0.04666666666666667
+      },
+      {
+        "effectSize": 0.02,
+        "sampleSize": 250,
+        "trials": 150,
+        "detections": 9,
+        "detectionRate": 0.06
+      },
+      {
+        "effectSize": 0.02,
+        "sampleSize": 500,
+        "trials": 150,
+        "detections": 12,
+        "detectionRate": 0.08
+      },
+      {
+        "effectSize": 0.05,
+        "sampleSize": 20,
+        "trials": 150,
+        "detections": 10,
+        "detectionRate": 0.06666666666666667
+      },
+      {
+        "effectSize": 0.05,
+        "sampleSize": 50,
+        "trials": 150,
+        "detections": 16,
+        "detectionRate": 0.10666666666666667
+      },
+      {
+        "effectSize": 0.05,
+        "sampleSize": 100,
+        "trials": 150,
+        "detections": 19,
+        "detectionRate": 0.12666666666666668
+      },
+      {
+        "effectSize": 0.05,
+        "sampleSize": 250,
+        "trials": 150,
+        "detections": 38,
+        "detectionRate": 0.25333333333333335
+      },
+      {
+        "effectSize": 0.05,
+        "sampleSize": 500,
+        "trials": 150,
+        "detections": 66,
+        "detectionRate": 0.44
+      },
+      {
+        "effectSize": 0.1,
+        "sampleSize": 20,
+        "trials": 150,
+        "detections": 13,
+        "detectionRate": 0.08666666666666667
+      },
+      {
+        "effectSize": 0.1,
+        "sampleSize": 50,
+        "trials": 150,
+        "detections": 28,
+        "detectionRate": 0.18666666666666668
+      },
+      {
+        "effectSize": 0.1,
+        "sampleSize": 100,
+        "trials": 150,
+        "detections": 41,
+        "detectionRate": 0.2733333333333333
+      },
+      {
+        "effectSize": 0.1,
+        "sampleSize": 250,
+        "trials": 150,
+        "detections": 93,
+        "detectionRate": 0.62
+      },
+      {
+        "effectSize": 0.1,
+        "sampleSize": 500,
+        "trials": 150,
+        "detections": 133,
+        "detectionRate": 0.8866666666666667
+      },
+      {
+        "effectSize": 0.2,
+        "sampleSize": 20,
+        "trials": 150,
+        "detections": 43,
+        "detectionRate": 0.2866666666666667
+      },
+      {
+        "effectSize": 0.2,
+        "sampleSize": 50,
+        "trials": 150,
+        "detections": 80,
+        "detectionRate": 0.5333333333333333
+      },
+      {
+        "effectSize": 0.2,
+        "sampleSize": 100,
+        "trials": 150,
+        "detections": 128,
+        "detectionRate": 0.8533333333333334
+      },
+      {
+        "effectSize": 0.2,
+        "sampleSize": 250,
+        "trials": 150,
+        "detections": 150,
+        "detectionRate": 1
+      },
+      {
+        "effectSize": 0.2,
+        "sampleSize": 500,
+        "trials": 150,
+        "detections": 150,
+        "detectionRate": 1
+      }
+    ]
+  },
+  "pairingBenefit": {
+    "n": 100,
+    "effectSize": 0.08,
+    "trials": 300,
+    "pairedDetectionRate": 0.21333333333333335,
+    "unpairedDetectionRate": 0.14333333333333334
+  }
+}

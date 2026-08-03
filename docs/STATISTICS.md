@@ -104,3 +104,127 @@ This comes directly from treating the comparison as a **one-sample test on the v
 **Why this tool never says "improved" outright.** `improvement_detected` is the strongest positive verdict this function can return, and its name is deliberately not "proven better." A tool that tells a team a noisy 40-case suite shows their change is "good" trains that team to ship on noise, and the first time that backfires in production is the last time anyone trusts the tool. The narrower claim — "we detected evidence of an improvement, at this sample size and this significance level" — is the one that survives a skeptical engineer asking follow-up questions.
 
 **Verified against:** 13 hand-constructed input combinations covering every branch and every precedence interaction described above — including deliberately adversarial cases like a fully-improving CI paired with `criticalRegressed > 0` (must still return `regression`), a fully-regressing CI paired with `mde` far over ceiling (must still return `regression`, not `insufficient_data`), and boundary cases at exactly zero / exactly the ceiling / exactly the floor (must fall to the non-triggered side, since every threshold in this function is a strict inequality). All 13 passed against their expected verdict.
+
+## 6. The comparison engine — wiring pairing to the four primitives
+
+**Files:** `packages/core/src/comparison/pairing.ts` (`pairCases`) and `packages/core/src/comparison/statistics.ts` (`computeComparison`).
+
+Sections 1–5 above cover the four pure statistical primitives in isolation. This section covers how Phase 4 wires them together into one comparison, per §5.1/§5.6 of the spec. Like everything above it, both files are pure functions over plain data — no database, no API calls, no file reads.
+
+### 6.1 Pairing
+
+`pairCases(baseline, candidate)` takes two arrays of per-case outcomes — one row per case per run, each either a valid `{ score, passed }` or `{ score: null, passed: null }` for a case that errored on that side — and produces two lists:
+
+- `paired`: cases with a valid, non-null result on **both** sides. Each entry carries `difference = candidateScore - baselineScore` (§5.1's `d_i`), the exact quantity every downstream statistic operates on.
+- `excluded`: every other case, tagged with *why* it didn't pair — `errored-baseline`, `errored-candidate`, `errored-both` (present on both sides but at least one side failed), or `missing-baseline`/`missing-candidate` (present on only one side at all).
+
+A case's own `externalId` never appears in both lists — the two lists partition the full set of `externalId`s seen across both inputs. This is what makes §5.1's rule concrete: *"A case that errored on one side is excluded from the comparison and reported separately as an error, never silently scored zero."* An excluded case contributes nothing to any mean, any CI, any McNemar count — it is reported to the user as an infrastructure problem, not folded into the statistic as if the model produced a bad answer.
+
+`critical` is carried onto each paired case for use downstream (the critical-case override, §6.3 below). Since `critical` is a property of the underlying dataset case rather than of a specific run, both sides should agree on it; if they don't (a data inconsistency pairing can't rule out from its inputs alone), pairing takes the logical OR of the two sides — treating a case as critical if *either* side says so, since under-flagging a critical case is the more dangerous failure direction here.
+
+### 6.2 Combining the four primitives
+
+`computeComparison` takes the `paired` list from `pairCases` (never the `excluded` list — nothing excluded ever enters a statistic) plus the run's thresholds (`alpha`, `mdeCeiling`, `minPairedN`, `bootstrapIterations`, and optionally `power`, which defaults to 0.8 — the value used everywhere the spec's own prose discusses power) and:
+
+1. Computes `regressedExternalIds` / `fixedExternalIds` / `criticalRegressed` directly from the paired list's pass/fail flips (§6.4 below).
+2. Runs `bootstrapCI` on the vector of `difference`s to get the point estimate (`delta`) and the 95% interval (`ciLower`/`ciUpper`).
+3. Computes the sample standard deviation of the same differences and feeds it into `minimumDetectableEffect` to get `mde`.
+4. Runs `mcnemarTest` on the paired `baselinePassed`/`candidatePassed` arrays as supplementary evidence (§6.5 below).
+5. Feeds `ciLower`, `ciUpper`, `mde`, `mdeCeiling`, the paired count, `minPairedN`, and `criticalRegressed` into `determineVerdict` to get the one word a human reads.
+
+**The verdict is always driven by the bootstrap CI, never by McNemar.** This is a specific reading of the `comparisons` table (§4 of the spec), which has a single `test`/`p_value` pair, not one per statistical method, and of `verdict.ts`'s signature, which only accepts a CI (`ciLower`/`ciUpper`), not a McNemar result. McNemar is always additionally computed (whenever there's at least one paired case) and reported on the result — its `discordantB`/`discordantC` counts are a second, independently-derived check that the regressed/fixed counts are internally consistent (§6.4) — but it never substitutes for the bootstrap CI in deciding the verdict. `test` is therefore always reported as `'paired_bootstrap'`, and the top-level `pValue` is always `null`: the percentile bootstrap as implemented doesn't produce a formal p-value (that would require the full vector of resampled means, which `BootstrapResult` doesn't expose), and McNemar's own p-value stays on `mcnemar.pValue` rather than being copied into a top-level field that's documented as describing the named `test`. See `docs/DECISIONS.md` for the alternative (a McNemar-driven verdict path for binary-only suites) and why it was deferred rather than built now.
+
+### 6.3 The critical-case override, concretely
+
+Per §5.6, a critical-tagged case regressing fails the check "regardless of the aggregate statistic." Concretely: `computeComparison` counts `criticalRegressed` independently of the CI, and passes it straight into `determineVerdict`, whose first branch is `ciUpper < 0 || criticalRegressed > 0`. A suite where 29 easy cases all improved and 1 critical case flipped from passing to failing will have a CI sitting entirely above zero (the aggregate looks like a strict improvement) — and still returns `verdict: 'regression'`, because the critical-case check runs first and short-circuits everything below it. Verified with real numbers in the Phase 4 verification output: CI `[0.30, 0.40]` (fully positive), `criticalRegressed: 1`, verdict `regression`.
+
+### 6.4 Regressed and fixed are defined by a pass/fail flip, not raw score movement
+
+```
+regressed: baselinePassed === true  && candidatePassed === false
+fixed:     baselinePassed === false && candidatePassed === true
+```
+
+A case whose score moved (say 0.9 → 0.7) but whose pass/fail status didn't is not counted as "regressed" here — a raw-score-movement definition would make `criticalRegressed` and the PR comment's "regressed cases" table (§5.8) sensitive to threshold noise inside the passing band, which is exactly the kind of noise the rest of this document argues against chasing. This definition is also what keeps McNemar's `discordantB`/`discordantC` in exact agreement with `regressedExternalIds.length`/`fixedExternalIds.length` — both are counting the same flips, from the same paired list, by construction. That agreement is asserted directly in the Phase 4 verification (see below), not just assumed.
+
+### 6.5 The `pairedCaseCount === 0` edge case
+
+`bootstrapCI` throws on an empty array by design (Phase 1's own contract: "requires at least one difference"). If every case in the suite errored on at least one side, `paired` is empty and there is nothing to bootstrap, nothing to run McNemar on, and no real delta to report. `computeComparison` short-circuits before calling any Phase 1 primitive in this case, rather than letting that error propagate up as an unhandled crash, and returns:
+
+- `delta: 0`, `ciLower: 0`, `ciUpper: 0` — there is no data to compute a real point estimate or interval from. Reporting `[0, 0]` alongside `insufficient_data` (not `no_detectable_difference`) is the honest way to say "nothing was measured," rather than accidentally reading as a legitimate zero-effect finding.
+- `mde: Infinity`, deliberately not `0`. The MDE means "the smallest true difference this dataset could reliably detect." With zero paired cases, the dataset cannot reliably detect *any* effect, no matter how large — reporting `0` would claim perfect sensitivity, the exact opposite of the truth, and the opposite failure direction from the one §5.4 exists to prevent (an under-reported MDE hiding a suite's blind spots).
+- `mcnemar: null` — nothing to compute McNemar over.
+- `verdict: 'insufficient_data'` — not `no_detectable_difference`. Zero paired cases is the clearest possible instance of "this dataset could not have found anything," never "we looked and found nothing."
+
+Verified directly: a case list where every case errors on at least one side (one of each of `errored-baseline`, `errored-candidate`, and `missing-baseline`) produces `paired.length === 0` from `pairCases`, and `computeComparison` returns the exact result above without throwing.
+
+### 6.6 A known small-n artifact in the MDE, and why it's not special-cased here
+
+With exactly one paired case, the sample standard deviation of a single value is undefined by the usual Bessel-corrected formula (division by `n - 1 = 0`); `computeComparison` returns `0` for that case rather than `NaN`, and `minimumDetectableEffect` already treats `differenceSD === 0` as "any nonzero true effect would be detected with certainty" (`mde = 0`). Read literally at `n = 1` that's backwards — one case tells you almost nothing about the dataset's sensitivity. This isn't special-cased in `computeComparison` because it doesn't need to be: `determineVerdict`'s `pairedN < minPairedN` branch already catches it for any sane `minPairedN` (which should always be well above 1), producing `insufficient_data` regardless of what the MDE formula reports at that n. Documented here rather than silently patched, per `docs/DECISIONS.md`.
+
+## 7. Cohen's kappa — validating the judge, per §5.5
+
+**File:** `packages/core/src/judge/kappa.ts` — `cohensKappa(humanPassed, judgePassed)`
+
+**What it measures.** Whether an LLM judge's pass/fail calls agree with a human's pass/fail calls on the *same outputs*, corrected for the agreement you'd expect to see by pure chance given how skewed the pass rate already is. It is the statistic that turns "we ran a judge" into "we validated a judge" per §5.5: any `judge:*` grader requires a passing calibration (`cohensKappa >= JUDGE_KAPPA_FLOOR`, default 0.6) before its scores may drive a blocking verdict; below the floor, the CI check reports the judge's scores as advisory only.
+
+**Why raw agreement is not enough.** §5.5 states the failure mode directly: "on a task where 90% of cases pass, a judge that says 'pass' unconditionally scores 90% agreement and knows nothing." Raw agreement (`agreementRate = (bothPass + bothFail) / n`) cannot distinguish a judge that is actually discriminating pass from fail from a judge that has simply learned the base rate and repeats it — a rubber-stamp judge on a mostly-passing dataset looks great by raw agreement alone. Kappa corrects for this by subtracting out the agreement rate two independent, uninformed raters with the *same marginal pass rates* would produce purely by chance, then rescaling what's left:
+
+```
+Po = observed agreement rate = (bothPass + bothFail) / n
+Pe = expected agreement by chance
+   = (humanPassRate * judgePassRate) + (humanFailRate * judgeFailRate)
+kappa = (Po - Pe) / (1 - Pe)
+```
+
+`Po` is what raw agreement already reports. `Pe` is what a judge that ignored the actual output entirely and just guessed "pass" at its own observed pass rate would agree with the human purely by luck, given how skewed the human's own pass rate is. `kappa` is the fraction of the *possible* improvement over chance (`1 - Pe`) that was actually achieved (`Po - Pe`). A judge that only reproduces the base rate has `Po ≈ Pe`, so `kappa ≈ 0` — "knows nothing" — even while `agreementRate` sits at 90%. Both numbers are reported side by side in `KappaResult` (`agreementRate` alongside `cohensKappa`) specifically so a reader sees the gap between them, never just the flattering one.
+
+**Standard, unweighted, 2-category kappa — not a continuous/ordinal-weighted variant.** This implementation computes kappa on the binary PASS/FAIL classification only, matching §5.5's own framing (the 90%-pass example is a statement about a binary classifier) and the `grades.passed: boolean` column in the schema (§4). See `docs/DECISIONS.md` for why a weighted kappa (e.g. quadratic-weighted, appropriate for an ordered multi-point scale where "off by one point" should count as partial credit) was considered and set aside.
+
+**The Pe === 1 degenerate case.** Algebraically, `Pe` can only equal 1 when both raters are unanimous in the *identical* direction across the entire labeled sample — every human label and every judge label are "pass" (or every one is "fail"). Whenever that holds, `Po` is also exactly 1 (if every label from both raters is "pass," every pair is a `bothPass` concordant pair), so the raw formula divides `0` by `0` — a genuine mathematical indeterminate, not just an unlucky zero denominator. No kappa is implied by data like this, because a sample with zero variance in both raters never actually tested whether the judge can tell pass from fail; it never saw a fail. `cohensKappa()` returns `0` in this case rather than `NaN`, `1`, or throwing — see `docs/DECISIONS.md` for the full reasoning; in short, `0` fails the `JUDGE_KAPPA_FLOOR` gate by default, which is the safe direction, and the full `confusionMatrix` is still returned alongside it so a human can immediately see *why* (a matrix with only `bothPass` or only `bothFail` populated looks nothing like a matrix with a real spread of disagreement, even though both currently reduce to the same `kappa` number).
+
+**Assumptions:**
+
+- **`humanPassed[i]` and `judgePassed[i]` describe the same output**, in the same order — per §5.5, that pairing happens by `output_hash`, upstream of this function (see `packages/core/src/judge/calibration.ts`'s `matchLabelsToJudgeGrades`); this function trusts that the arrays it receives are already correctly paired, exactly as `mcnemarTest` trusts its inputs are already paired per-case.
+- **Independence across labeled outputs.** If the sampled outputs are not independent (near-duplicates, several from the same conversation), the effective sample size behind `labelCount` is smaller than it looks, and kappa is more sensitive to those correlated cases than the raw count implies — the same failure mode documented for the bootstrap's exchangeability assumption (§2) and McNemar's independence assumption (§3).
+- **Kappa validates the judge against the human rubric, not against ground truth about the product.** A judge and a human labeler can agree with each other very well (high kappa) while both applying a rubric that doesn't actually capture what the feature should do. Kappa says the measurement instrument agrees with itself across raters; it says nothing about whether the rubric measures the right thing.
+
+**Verified against:** the widely-cited Wikipedia worked example for Cohen's kappa — a 2×2 table with `bothPass=20, humanPassJudgeFail=5, humanFailJudgePass=10, bothFail=15` (n=50). Hand computation: `Po = 35/50 = 0.70`, `Pe = 0.5×0.6 + 0.5×0.4 = 0.50`, `kappa = (0.70−0.50)/(1−0.50) = 0.40` (Landis & Koch's "fair agreement" band). The function returned `cohensKappa: 0.3999999999999999` (floating-point noise on an exact `0.4`) and `agreementRate: 0.7`, matching to well within floating-point tolerance.
+
+## 8. Phase 6 — validating the comparison engine against a known ground truth
+
+Everything in §1–§7 above is a claim about how the comparison engine and the judge calibration *should* behave. Phase 6 (`packages/core/src/simulations/`) turns those claims into measurements, by generating synthetic data where the true answer is known by construction and checking that the real, production `computeComparison`/`minimumDetectableEffect`/`cohensKappa` functions recover it.
+
+### 8.1 The synthetic data generator
+
+`generateSyntheticPairedCases` (`simulations/generator.ts`) is the shared foundation every other Phase 6 file builds on. Each of `n` synthetic cases gets its own latent difficulty `p_i = clamp(basePassRate + caseDifficultySpread · u_i, 0, 1)` for `u_i ~ Uniform(-1, 1)`, and `baseline_i ~ Bernoulli(p_i)`, `candidate_i ~ Bernoulli(clamp(p_i − effectSize, 0, 1))` — **the same `p_i` drives both sides of a case.** This matters: it's what gives paired analysis something real to cancel out (§8.5 below depends on it directly), and it models the realistic situation where some inputs are inherently harder than others, independent of which variant answers them. Every generated case has `critical: false` — the critical-case override (§5.6) is a deterministic policy layered on top of the statistical test, not itself a calibratable false-positive rate, and mixing it in would inflate every rate below for reasons that have nothing to do with the statistics being validated. Difficulty spread is modeled as a uniform wobble, not a Beta distribution — a deliberate simplification (a correct Beta sampler needs a Gamma sampler on top of the seeded PRNG this repo has, and none of the five validations below need any particular distributional shape, only *some* shared per-case variance).
+
+### 8.2 The null model, and a finding that changes how to read it
+
+§6.1's null model runs two variants with *identical* true behavior (`effectSize: 0`) through the real `computeComparison`, repeated across many trials, and counts how often the verdict comes back `regression`.
+
+**The finding:** `determineVerdict` (§5.6) sets `verdict: 'regression'` when `ciUpper < 0` — one edge of a two-sided `(1 − α)` bootstrap CI (§5.2). Under a true null, standard CI theory says that one-sided event converges to `α/2`, not `α` — the symmetric `improvement_detected` event takes the other `α/2`, and together they sum to `α`. Real runs confirm this precisely: at `α = 0.05`, `n = 100`, 2,000 trials, `regressionRate` measured **2.35%** (target `2.5%`) and `regressionRate + improvementRate` measured exactly **5.00%** (target `5%`).
+
+§6.1's prose ("the observed rate must land near 5%") and the README's own worked example (§12: "reports a false regression 4.9% of the time") are quantitatively consistent with the **combined** two-sided rate — but §6.1 also explicitly says to count only `regression` verdicts, which is the **one-sided** rate. The two readings differ by a factor of ~2, and which one is "the false positive rate" depends on what the tool is claiming: `regressionRate` is the rate that actually blocks a PR under a true null (the operationally relevant number — `improvement_detected` still passes the check per §5.6's table); `combinedRate` is the standard textbook two-sided Type-I-error rate, and the one the spec's own numbers land on. `runNullModelSimulation` reports both, each checked against its own correct target, rather than silently resolving this. See `docs/DECISIONS.md` for the full writeup — this is the headline finding of the Phase 6 checkpoint, not a bug to quietly patch.
+
+### 8.3 Power curve (§6.2)
+
+`runPowerCurveSimulation` injects a known regression (`effectSize > 0`) at a grid of `(effectSize, sampleSize)` cells and measures `detectionRate` — the fraction of trials whose verdict is `regression`. Unlike the null model, this is squarely a one-sided question (there IS a true regression to detect), so the one-sided/two-sided distinction in §8.2 doesn't apply here — detection rate should simply rise with both effect size and n, which real runs confirm (e.g. a 20-point regression detected 100% of the time by n=250; a 1-point regression barely above the noise floor at n=20). `interpolateDetectionThreshold` finds the effect size at which a sample size's detection rate crosses a target power via linear interpolation between bracketing grid points.
+
+### 8.4 MDE validation (§6.3)
+
+For a given sample size, `runMdeValidation` computes `reportedMde` (the real `minimumDetectableEffect`, fed a representative per-case difference SD measured from synthetic data) and `empiricalMde` (the effect size at which a dense power-curve sweep crosses 80% detection, via §8.3's interpolation). Real runs show close agreement — e.g. `n=100`: reported `18.2pt`, empirical `18.2pt`; `n=250`: reported `11.6pt`, empirical `12.5pt` — well within the 35% relative tolerance used (wide on purpose: `empiricalMde` carries real finite-trial simulation noise from a necessarily-coarse sweep, and a tight tolerance would test that noise rather than the formula).
+
+### 8.5 Pairing benefit (§6.5)
+
+`runPairingBenefitSimulation` runs the *same* synthetic dataset — same shared per-case difficulty from §8.1 — through both the real paired `computeComparison` and a self-contained unpaired analysis (an independent bootstrap on the difference of the two groups' means, discarding the case-to-case correspondence entirely, as if the tool had compared two averages instead of per-case differences). This unpaired path exists only to make this one comparison possible; it is not, and will never be, a real product option (that's the entire point of §5.1). A real run (`n=100`, an 8-point injected regression, meaningful shared per-case variance) measured `pairedDetectionRate: 21.3%` against `unpairedDetectionRate: 14.3%` — the paired method detects a real effect materially more often at the identical n, because it cancels the per-case variance the unpaired method has to absorb whole.
+
+### 8.6 Judge drift (§6.4)
+
+There is no real judge model callable in this build/CI environment, so `runJudgeDriftSimulation` uses a synthetic stand-in: a "judge" whose call on a case is the true human label with probability `accuracy`, else its opposite. "Perturbing the rubric wording" is modeled as changing `accuracy` between a before/after run. This does not mechanistically simulate a real LLM judge's response to a prompt edit — it demonstrates the one thing §6.4 asks to see: that the real `cohensKappa` genuinely responds to a real change in judge quality. Verified: accuracy 0.9→0.65 moved kappa 0.762→0.268; accuracy 0.6→0.95 moved kappa 0.178→0.911; a coin-flip judge (accuracy 0.5) landed at kappa ≈ 0 as expected; a perfect judge (accuracy 1.0) landed at kappa exactly 1 before and after. Has no CLI surface (§7 lists only `llmreg simulate null|power|mde`) — library function and tests only, a deliberate scope decision.
+
+### 8.7 Determinism
+
+Every Phase 6 function is fully deterministic given its `seed` — including the four (`null-model`, `power-curve`, `mde-validation`, `pairing-benefit`'s paired path) that call the real `computeComparison`. This required a small, backward-compatible addition to `bootstrapCI`/`computeComparison`: an optional `rand` parameter (defaults to `Math.random`, unchanged for every production call site) that Phase 6 feeds a seeded `mulberry32` stream. See `docs/DECISIONS.md`.
+
+The §5.5 scenario was verified directly with n=100 (90 human-pass/10 human-fail against an all-pass judge): the function returned `agreementRate: 0.9` (misleadingly high) alongside `cohensKappa: 0` exactly (correctly low — the judge "knows nothing," matching the hand computation `Po=0.90, Pe=0.90, kappa=0`). Perfect non-degenerate agreement (5 bothPass, 5 bothFail — variance present in both raters) returned `cohensKappa: 1` exactly. The Pe===1 degenerate case (all-pass, and separately all-fail, on both raters) returned `cohensKappa: 0`, finite, not `NaN`, with `agreementRate: 1` alongside it so the two numbers together tell the honest story: perfect concordance, zero information about discrimination.
