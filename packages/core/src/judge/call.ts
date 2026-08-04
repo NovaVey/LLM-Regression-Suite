@@ -35,6 +35,16 @@ function parseJudgeResponse(raw: string, stopReason?: string | null): { score: n
         `Judge response was truncated (stop_reason: max_tokens) before it finished -- this is not malformed JSON, it's an incomplete response. Raw response: ${raw.slice(0, 200)}`,
       );
     }
+    if (stopReason === 'refusal') {
+      throw new JudgeResponseError(
+        'Judge model refused to grade this case/output (stop_reason: refusal) -- not malformed JSON, the judge declined to respond at all.',
+      );
+    }
+    if (raw.trim() === '') {
+      throw new JudgeResponseError(
+        `Judge model returned no text content at all (stop_reason: ${stopReason ?? 'unknown'}) -- not malformed JSON, there was nothing to parse.`,
+      );
+    }
     throw new JudgeResponseError(
       `Judge response is not valid JSON: ${err instanceof Error ? err.message : String(err)}. Raw response: ${raw.slice(0, 200)}`,
     );
