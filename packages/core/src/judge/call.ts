@@ -19,11 +19,22 @@ export interface JudgeCallResult {
 
 class JudgeResponseError extends Error {}
 
-function parseJudgeResponse(raw: string): { score: number; rationale: string } {
+function parseJudgeResponse(raw: string, stopReason?: string | null): { score: number; rationale: string } {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch (err) {
+    // "Malformed JSON" and "the response was cut off before it finished"
+    // are different failures calling for different fixes -- the first
+    // means the judge ignored the format instruction, the second means
+    // maxTokens was too small for what the judge had to say. Distinguish
+    // them rather than reporting every truncated response as generically
+    // invalid, per the project's "errors name the fix" rule (README §8/§12).
+    if (stopReason === 'max_tokens') {
+      throw new JudgeResponseError(
+        `Judge response was truncated (stop_reason: max_tokens) before it finished -- this is not malformed JSON, it's an incomplete response. Raw response: ${raw.slice(0, 200)}`,
+      );
+    }
     throw new JudgeResponseError(
       `Judge response is not valid JSON: ${err instanceof Error ? err.message : String(err)}. Raw response: ${raw.slice(0, 200)}`,
     );
@@ -61,9 +72,16 @@ export async function callJudge(
 
   const result = await callTarget([{ role: 'user', content: userMessage }], judgeModel, judgeTemperature, {
     systemPrompt,
+    // The prompt asks for "one or two sentences," but that's an instruction
+    // the model doesn't always follow exactly -- 1024 (callTarget's own
+    // default) left too little headroom and produced truncated,
+    // unparseable JSON in real runs. A judge rationale is never going to
+    // need anywhere near 4096 tokens; this is slack against the model
+    // occasionally running longer than asked, not a real ceiling.
+    maxTokens: 4096,
   });
 
-  const { score, rationale } = parseJudgeResponse(result.output);
+  const { score, rationale } = parseJudgeResponse(result.output, result.stopReason);
 
   return {
     score,

@@ -54,6 +54,16 @@ export interface TargetCallResult {
   latencyMs: number;
   inputTokens: number | null;
   outputTokens: number;
+  /**
+   * The API's own reason the response ended -- "end_turn"/"stop_sequence"
+   * for a genuinely complete response, "max_tokens" if it was cut off
+   * before finishing. Optional (undefined for fake TargetCallers in tests
+   * that don't model it) so callers that care -- currently just
+   * judge/call.ts, which needs to tell "the judge's JSON is malformed" and
+   * "the judge's response was truncated mid-JSON by the token budget" apart
+   * -- can, without every existing fake needing to supply it.
+   */
+  stopReason?: string | null;
 }
 
 /**
@@ -122,5 +132,6 @@ export async function callTarget(
     latencyMs,
     inputTokens: response.usage.input_tokens,
     outputTokens: response.usage.output_tokens,
+    stopReason: response.stop_reason,
   };
 }
