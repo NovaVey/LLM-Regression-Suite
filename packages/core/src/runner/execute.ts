@@ -56,6 +56,15 @@ export interface ExecuteRunOptions {
   useCache?: boolean;
   cacheStore?: CacheStore;
   targetCaller?: TargetCaller;
+  /**
+   * Invoked synchronously after each case/sample finishes (success, cache
+   * hit, or error), with the count completed so far and the total. Optional
+   * and purely observational -- executeRun's own behavior never depends on
+   * it. Exists because a 240-case run against the real API, with no
+   * progress output at all until the very end, is indistinguishable from a
+   * hang to anyone running it for the first time -- see docs/DECISIONS.md.
+   */
+  onProgress?: (completed: number, total: number, result: CaseExecutionResult) => void;
 }
 
 export interface ExecuteRunResult {
@@ -79,6 +88,13 @@ export async function executeRun(options: ExecuteRunOptions): Promise<ExecuteRun
   }
 
   let cacheHits = 0;
+  let completed = 0;
+  const total = work.length;
+  const reportProgress = (result: CaseExecutionResult): CaseExecutionResult => {
+    completed += 1;
+    options.onProgress?.(completed, total, result);
+    return result;
+  };
 
   const results = await runWithConcurrency(work, options.maxConcurrency, async ({ caseData, sampleIndex }) => {
     const cacheKey = computeCacheKey({
@@ -93,7 +109,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<ExecuteRun
       const cached = await cacheStore.get(cacheKey);
       if (cached) {
         cacheHits += 1;
-        return {
+        return reportProgress({
           externalId: caseData.externalId,
           sampleIndex,
           output: cached.output,
@@ -102,7 +118,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<ExecuteRun
           fromCache: true,
           inputTokens: cached.inputTokens,
           outputTokens: cached.outputTokens,
-        } satisfies CaseExecutionResult;
+        } satisfies CaseExecutionResult);
       }
     }
 
@@ -123,7 +139,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<ExecuteRun
         });
       }
 
-      return {
+      return reportProgress({
         externalId: caseData.externalId,
         sampleIndex,
         output: callResult.output,
@@ -132,11 +148,11 @@ export async function executeRun(options: ExecuteRunOptions): Promise<ExecuteRun
         fromCache: false,
         inputTokens: callResult.inputTokens,
         outputTokens: callResult.outputTokens,
-      } satisfies CaseExecutionResult;
+      } satisfies CaseExecutionResult);
     } catch (err) {
       // Error isolation: one case failing must never abort the run and must
       // be reported as an error, never silently scored as a zero (§5.1/§5.9).
-      return {
+      return reportProgress({
         externalId: caseData.externalId,
         sampleIndex,
         output: null,
@@ -145,7 +161,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<ExecuteRun
         fromCache: false,
         inputTokens: null,
         outputTokens: null,
-      } satisfies CaseExecutionResult;
+      } satisfies CaseExecutionResult);
     }
   });
 

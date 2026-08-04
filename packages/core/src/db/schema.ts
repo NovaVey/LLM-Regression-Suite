@@ -36,6 +36,10 @@ export const cases = pgTable(
     // Cases the team decided are the hard ones. Reported separately: a change
     // that regresses only critical cases can be invisible in the overall number.
     critical: boolean('critical').notNull().default(false),
+    // Added in migration 0003 (Phase 9): required and validated (non-empty)
+    // at load time for every critical case per §5.6, but not originally
+    // persisted -- the Dataset/Case-diff screens need it alongside `critical`.
+    criticalReason: text('critical_reason'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [uniqueIndex('cases_suite_id_external_id_key').on(table.suiteId, table.externalId)]
@@ -157,6 +161,14 @@ export const judgeCalibrations = pgTable('judge_calibrations', {
   // Systematic direction of disagreement, e.g. "judge scores 0.3 high on refusals".
   biasNote: text('bias_note'),
   passed: boolean('passed').notNull(), // kappa >= JUDGE_KAPPA_FLOOR
+  // Added in migration 0002 (Phase 9): the confusion matrix behind
+  // cohensKappa/agreementRate above -- computed at calibration time but not
+  // originally persisted; the Calibration screen needs it per-record, not
+  // just recomputable for "now".
+  bothPass: integer('both_pass').notNull().default(0),
+  humanPassJudgeFail: integer('human_pass_judge_fail').notNull().default(0),
+  humanFailJudgePass: integer('human_fail_judge_pass').notNull().default(0),
+  bothFail: integer('both_fail').notNull().default(0),
   calibratedAt: timestamp('calibrated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 

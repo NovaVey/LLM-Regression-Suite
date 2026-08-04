@@ -16,6 +16,7 @@ import { and, desc, eq, inArray } from 'drizzle-orm';
 import { getDb } from '../db/client.js';
 import { caseResults, cases as casesTable, grades, humanLabels, judgeCalibrations } from '../db/schema.js';
 import type { CalibrationRecord, HumanLabelRecord, JudgeGradeRecord } from './calibration.js';
+import type { ConfusionMatrix } from './kappa.js';
 
 export function hashOutput(output: string): string {
   return createHash('sha256').update(output).digest('hex');
@@ -120,6 +121,7 @@ export async function saveCalibration(params: {
   agreementRate: number;
   biasNote: string;
   passed: boolean;
+  confusionMatrix: ConfusionMatrix;
 }): Promise<string> {
   const db = getDb();
   const inserted = await db
@@ -134,6 +136,10 @@ export async function saveCalibration(params: {
       agreementRate: String(params.agreementRate),
       biasNote: params.biasNote,
       passed: params.passed,
+      bothPass: params.confusionMatrix.bothPass,
+      humanPassJudgeFail: params.confusionMatrix.humanPassJudgeFail,
+      humanFailJudgePass: params.confusionMatrix.humanFailJudgePass,
+      bothFail: params.confusionMatrix.bothFail,
     })
     .returning({ id: judgeCalibrations.id });
   return inserted[0]!.id;
@@ -153,5 +159,47 @@ export async function getCalibrationsForGrader(suiteId: string, grader: string):
     cohensKappa: Number(r.cohensKappa),
     labelCount: r.labelCount,
     passed: r.passed,
+  }));
+}
+
+export interface CalibrationHistoryRecord {
+  id: string;
+  grader: string;
+  judgeModel: string;
+  judgePromptHash: string;
+  labelCount: number;
+  cohensKappa: number;
+  agreementRate: number;
+  biasNote: string | null;
+  passed: boolean;
+  confusionMatrix: ConfusionMatrix;
+  calibratedAt: string;
+}
+
+/** Full calibration history for a suite (every grader, oldest first -- a time series), for the Calibration screen (§8). */
+export async function getCalibrationHistoryForSuite(suiteId: string): Promise<CalibrationHistoryRecord[]> {
+  const db = getDb();
+  const rows = await db
+    .select()
+    .from(judgeCalibrations)
+    .where(eq(judgeCalibrations.suiteId, suiteId))
+    .orderBy(judgeCalibrations.calibratedAt);
+  return rows.map((r) => ({
+    id: r.id,
+    grader: r.grader,
+    judgeModel: r.judgeModel,
+    judgePromptHash: r.judgePromptHash,
+    labelCount: r.labelCount,
+    cohensKappa: Number(r.cohensKappa),
+    agreementRate: Number(r.agreementRate),
+    biasNote: r.biasNote,
+    passed: r.passed,
+    confusionMatrix: {
+      bothPass: r.bothPass,
+      humanPassJudgeFail: r.humanPassJudgeFail,
+      humanFailJudgePass: r.humanFailJudgePass,
+      bothFail: r.bothFail,
+    },
+    calibratedAt: r.calibratedAt.toISOString(),
   }));
 }

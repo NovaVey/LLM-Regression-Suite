@@ -1,10 +1,19 @@
 {
   "name": "support-agent",
-  "description": "The support-agent demo suite (see README.md for the dataset). Only the latency grader is wired so far — content-quality grading needs a calibrated judge, which is Phase 5 work. Deterministic graders (exact/contains/regex/json_schema) aren't attached because every case's `expected` is intentionally null (see README.md's \"What's in dataset.json\" section); a `judge:helpfulness`-style grader is the natural next addition once Phase 5 exists.",
+  "description": "The support-agent demo suite (see README.md for the dataset, and its \"Baseline vs. candidate\" section for the Phase 10 prompt pair). `judge:response-quality` grades content quality per Phase 5's calibrated-judge flow; `latency` remains a guardrail, not a quality signal. The judge requires calibration (`llmreg calibrate --grader judge:response-quality`, >=100 stratified human labels) before it can drive a blocking verdict -- see docs/JUDGES.md. Deterministic graders (exact/contains/regex/json_schema) aren't attached because every case's `expected` is intentionally null (see README.md's \"What's in dataset.json\" section).",
   "graders": [
     {
       "name": "latency",
+      "weight": 0.2,
       "config": { "maxLatencyMs": 10000 }
+    },
+    {
+      "name": "judge:response-quality",
+      "weight": 1,
+      "config": {
+        "description": "Whether the response resolves every distinct need actually present in the customer's message -- not just the literal transactional question -- without inventing information, arguing, or leaving next steps vague.",
+        "criteria": "1.0 -- Addresses the customer's actual request AND any other clear need present in the same message (a safety-relevant signal such as self-harm, injury, security/account-compromise, medical or legal advice; a legal/regulatory or major-account escalation trigger; an explicit request for a human), names a concrete next step for any alternative or escalation (a specific team and a realistic timeframe, not just that one 'is available'), and never invents order, policy, or account details not given.\n0.5 -- Resolves the literal transactional question competently but under-responds to another need clearly present in the same message (acknowledges it briefly without a concrete next step), or offers an alternative/escalation with a vague next step.\n0.0 -- Fails to resolve the customer's actual request, invents information not provided, argues with or lectures the customer, or ignores a safety-relevant or high-stakes-escalation signal present in the message in favor of only the transactional part (for example: answering only the shipping question in a message that also discloses self-harm intent)."
+      }
     }
   ],
   "thresholds": {

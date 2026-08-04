@@ -60,14 +60,30 @@ export async function runRunCommand(options: RunCommandOptions): Promise<RunComm
     promptHash,
   });
 
+  // No progress output at all until a 240-case run finishes is
+  // indistinguishable from a hang -- see docs/DECISIONS.md. Printed to
+  // stderr so stdout stays just the final summary a caller might parse.
+  // Fires on the FIRST case too (not just every 10th) so there's no silent
+  // gap right as a phase starts -- a throttle-only version of this still
+  // left a real "is it stuck again?" question at exactly the run->grading
+  // handoff, since grading's first API call can itself take several
+  // seconds before case 1 of 240 completes.
+  const logProgress = (label: string) => (completed: number, total: number) => {
+    if (completed === 1 || completed === total || completed % 10 === 0) {
+      process.stderr.write(`  ${label}: ${completed}/${total}\n`);
+    }
+  };
+
   const { results, cacheHits } = await executeRun({
     cases,
     variant: { model, temperature, promptHash, ...(systemPrompt !== undefined ? { systemPrompt } : {}) },
     maxConcurrency,
     sampleCount,
     useCache: options.cache,
+    onProgress: logProgress('running'),
   });
 
+  process.stderr.write(`  grading: starting (${results.length} cases)\n`);
   const { runId, cacheHitRate } = await persistRun({
     suiteId,
     variantId,
@@ -77,6 +93,7 @@ export async function runRunCommand(options: RunCommandOptions): Promise<RunComm
     executionResults: results,
     cacheHits,
     graders: suiteConfig.graders,
+    onProgress: logProgress('grading'),
   });
 
   const errored = results.filter((r): r is typeof r & { error: string } => r.error !== null);
